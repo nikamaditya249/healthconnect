@@ -1,14 +1,21 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export default function Topbar() {
+  const router = useRouter();
+
+  const handleLogout = () => {
+    localStorage.removeItem("role");
+    router.push("/login");
+  };
+
   return (
     <header style={styles.header}>
       <div style={styles.left}>HealthConnect</div>
 
       <div style={styles.right}>
-        <button style={styles.logoutBtn}>Logout</button>
+        <button style={styles.logoutBtn} onClick={handleLogout}>Logout</button>
       </div>
     </header>
   );

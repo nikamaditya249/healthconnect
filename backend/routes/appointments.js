@@ -1,6 +1,7 @@
-const express = require("express");
+import express from "express";
+import Appointment from "../models/Appointment.js";
+
 const router = express.Router();
-const Appointment = require("../models/Appointment");
 
 // 1️⃣ Add patient to OPD queue (Reception)
 router.post("/add", async (req, res) => {
@@ -39,4 +40,4 @@ router.put("/:id/complete", async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;

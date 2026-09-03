@@ -5,7 +5,7 @@ const router = express.Router();
 
 
 // CREATE PATIENT
-router.post("/", async (req, res) => {
+router.post(["/", "/add"], async (req, res) => {
   try {
     const patient = new Patient(req.body);
     const saved = await patient.save();
@@ -21,6 +21,19 @@ router.get("/", async (req, res) => {
   try {
     const patients = await Patient.find();
     res.json(patients);
+  } catch (err) {
+    res.status(500).json(err);
+  }
+});
+
+// GET SINGLE PATIENT
+router.get("/:id", async (req, res) => {
+  try {
+    const patient = await Patient.findById(req.params.id);
+    if (!patient) {
+      return res.status(404).json({ error: "Patient not found" });
+    }
+    res.json(patient);
   } catch (err) {
     res.status(500).json(err);
   }

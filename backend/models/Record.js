@@ -7,6 +7,10 @@ const recordSchema = new mongoose.Schema(
       ref: "Patient",
       required: true,
     },
+    doctorName: {
+      type: String,
+      default: "Dr. Smith",
+    },
     diagnosis: String,
     prescription: String,
   },

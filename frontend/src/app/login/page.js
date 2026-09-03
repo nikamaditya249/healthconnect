@@ -13,14 +13,20 @@ export default function LoginPage() {
 
         <button
           style={{ ...styles.button, ...styles.reception }}
-          onClick={() => router.push("/reception")}
+          onClick={() => {
+            localStorage.setItem("role", "reception");
+            router.push("/reception");
+          }}
         >
           Login as Reception
         </button>
 
         <button
           style={{ ...styles.button, ...styles.doctor }}
-          onClick={() => router.push("/doctor")}
+          onClick={() => {
+            localStorage.setItem("role", "doctor");
+            router.push("/doctor");
+          }}
         >
           Login as Doctor
         </button>
