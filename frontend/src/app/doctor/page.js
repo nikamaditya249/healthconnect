@@ -1,115 +1,516 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import axios from "axios";
-import { useRouter } from "next/navigation";
+import React, { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import {
+  Stethoscope,
+  Clock,
+  CheckCircle2,
+  Users,
+  Search,
+  Eye,
+  Activity,
+  ArrowRight,
+  Sparkles,
+  AlertCircle,
+  RefreshCw,
+  FileText,
+} from "lucide-react";
+import {
+  getOPDQueue,
+  getOPDStats,
+  updateOPDStatus,
+  getPatients,
+} from "@/lib/api";
+import { useToast } from "@/components/Toast";
+import Loader, { SkeletonRow } from "@/components/Loader";
 
-export default function DoctorQueuePage() {
-  const [patients, setPatients] = useState([]);
+export default function DoctorDashboard() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get("tab") || "queue";
+  const { addToast } = useToast();
 
-  const fetchPatients = async () => {
-    const res = await axios.get("http://localhost:5050/api/patients");
-    setPatients(res.data);
-  };
+  const [activeTab, setActiveTab] = useState(initialTab);
+  const [stats, setStats] = useState({ today: 0, waiting: 0, inProgress: 0, completed: 0, totalPatients: 0 });
+  const [queue, setQueue] = useState([]);
+  const [patients, setPatients] = useState([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [startingId, setStartingId] = useState(null);
 
   useEffect(() => {
-    fetchPatients();
-  }, []);
+    const tab = searchParams.get("tab");
+    if (tab && ["overview", "queue", "patients", "consultations"].includes(tab)) {
+      setActiveTab(tab);
+    }
+  }, [searchParams]);
 
-  const cycleStatus = async (patient) => {
-    const flow = ["waiting", "in-progress", "done"];
-    const current = patient.status || "waiting";
-    const next = flow[(flow.indexOf(current) + 1) % flow.length];
+  const fetchData = useCallback(async () => {
+    try {
+      setRefreshing(true);
+      const [statsData, queueData, patientsData] = await Promise.all([
+        getOPDStats(),
+        getOPDQueue(),
+        getPatients({ search: searchQuery, limit: 50 }),
+      ]);
+      setStats(statsData);
+      setQueue(queueData);
+      setPatients(patientsData.patients || []);
+    } catch (err) {
+      console.error("Error fetching doctor data:", err);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [searchQuery]);
 
-    await axios.put(
-      `http://localhost:5050/api/patients/${patient._id}/status`,
-      { status: next }
-    );
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
-    fetchPatients();
+  // Start Consultation Handler
+  const handleStartConsultation = async (visit) => {
+    const patientId = visit.patientId?._id;
+    if (!patientId) return;
+
+    setStartingId(visit._id);
+    try {
+      if (visit.status === "waiting") {
+        await updateOPDStatus(visit._id, "in-progress");
+        addToast(`Consultation started for ${visit.patientId.name}`, "info");
+      }
+      router.push(`/patient/${patientId}`);
+    } catch (err) {
+      console.error("Error starting consultation:", err);
+      // Fallback navigation
+      router.push(`/patient/${patientId}`);
+    } finally {
+      setStartingId(null);
+    }
   };
 
+  const activeConsultation = queue.find((q) => q.status === "in-progress");
+  const waitingPatients = queue.filter((q) => q.status === "waiting");
+  const completedToday = queue.filter((q) => q.status === "done" || q.status === "completed");
+
   return (
-    <div style={{ padding: "24px" }}>
-      <h2 style={{ color: "#c62828" }}>Doctor OPD Queue</h2>
+    <div>
+      {/* Header */}
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Doctor Consultation Station</h1>
+          <p className="page-subtitle">
+            Review waiting patients, examine past clinical records, and conduct OPD consultations.
+          </p>
+        </div>
 
-      <div style={grid}>
-        {patients.map((p) => (
-          <div key={p._id} style={card}>
-            <h3
-              style={name}
-              onClick={() => router.push(`/patient/${p._id}`)}
-            >
-              {p.name}
-            </h3>
-
-            <p>Age: {p.age}</p>
-            <p>Gender: {p.gender}</p>
-            <p>Blood: {p.bloodGroup}</p>
-
-            <span
-              style={{ ...badge, ...badgeColor(p.status) }}
-              onClick={() => cycleStatus(p)}
-            >
-              {(p.status || "waiting").toUpperCase()}
-            </span>
-
-            <button
-              style={button}
-              onClick={() => router.push(`/doctor/add-record/${p._id}`)}
-            >
-              Add Record
-            </button>
-          </div>
-        ))}
+        <div style={{ display: "flex", gap: "10px" }}>
+          <button
+            onClick={fetchData}
+            className="btn btn-secondary btn-sm"
+            title="Refresh clinical queue"
+          >
+            <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
+            <span>Refresh Queue</span>
+          </button>
+        </div>
       </div>
+
+      {/* Stats Cards */}
+      <div className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-icon-box" style={{ backgroundColor: "#fef3c7", color: "#b45309" }}>
+            <Clock size={24} />
+          </div>
+          <div>
+            <div className="stat-val">{stats.waiting}</div>
+            <div className="stat-lbl">Waiting Patients</div>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-icon-box" style={{ backgroundColor: "#dbeafe", color: "#1d4ed8" }}>
+            <Activity size={24} />
+          </div>
+          <div>
+            <div className="stat-val">{stats.inProgress}</div>
+            <div className="stat-lbl">In Active Consultation</div>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-icon-box" style={{ backgroundColor: "#d1fae5", color: "#047857" }}>
+            <CheckCircle2 size={24} />
+          </div>
+          <div>
+            <div className="stat-val">{stats.completed}</div>
+            <div className="stat-lbl">Completed Today</div>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-icon-box" style={{ backgroundColor: "#fee2e2", color: "#c62828" }}>
+            <Users size={24} />
+          </div>
+          <div>
+            <div className="stat-val">{stats.totalPatients}</div>
+            <div className="stat-lbl">Total Clinic Records</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Active Consultation Alert Banner */}
+      {activeConsultation && activeConsultation.patientId && (
+        <div
+          style={{
+            backgroundColor: "#eff6ff",
+            border: "1px solid #bfdbfe",
+            borderRadius: "12px",
+            padding: "16px 20px",
+            marginBottom: "24px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "14px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <div
+              style={{
+                width: "40px",
+                height: "40px",
+                borderRadius: "50%",
+                backgroundColor: "#2563eb",
+                color: "#ffffff",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Stethoscope size={20} />
+            </div>
+            <div>
+              <div style={{ fontSize: "14px", fontWeight: "700", color: "#1e3a8a" }}>
+                Active Consultation In-Progress: {activeConsultation.patientId.name} ({activeConsultation.patientId.patientId})
+              </div>
+              <div style={{ fontSize: "12px", color: "#3b82f6", marginTop: "2px" }}>
+                Chief Complaint: {activeConsultation.chiefComplaint || "General Checkup"}
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={() => router.push(`/patient/${activeConsultation.patientId._id}`)}
+            className="btn btn-primary btn-sm"
+            style={{ backgroundColor: "#2563eb" }}
+          >
+            <span>Continue Consultation</span>
+            <ArrowRight size={15} />
+          </button>
+        </div>
+      )}
+
+      {/* Tabs Navigation */}
+      <div className="tabs-nav">
+        <button
+          onClick={() => setActiveTab("queue")}
+          className={`tab-btn ${activeTab === "queue" || activeTab === "overview" ? "active" : ""}`}
+        >
+          <Clock size={16} />
+          <span>Today's OPD Queue ({waitingPatients.length + (activeConsultation ? 1 : 0)})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab("patients")}
+          className={`tab-btn ${activeTab === "patients" ? "active" : ""}`}
+        >
+          <Users size={16} />
+          <span>Patient Registry ({patients.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab("consultations")}
+          className={`tab-btn ${activeTab === "consultations" ? "active" : ""}`}
+        >
+          <CheckCircle2 size={16} />
+          <span>Completed Visits ({completedToday.length})</span>
+        </button>
+      </div>
+
+      {/* TAB 1: OPD QUEUE */}
+      {(activeTab === "queue" || activeTab === "overview") && (
+        <div className="card" style={{ padding: "0", overflow: "hidden" }}>
+          <div style={{ padding: "18px 22px", borderBottom: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <h3 style={{ fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>
+                Waiting Patients in OPD
+              </h3>
+              <p style={{ fontSize: "13px", color: "#64748b", marginTop: "2px" }}>
+                Click "Start Consultation" to review medical history and prescribe treatment.
+              </p>
+            </div>
+          </div>
+
+          <div className="table-container" style={{ border: "none" }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Token #</th>
+                  <th>Patient Name & ID</th>
+                  <th>Age / Sex</th>
+                  <th>Blood Group</th>
+                  <th>Chief Complaint</th>
+                  <th>Priority</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  Array.from({ length: 4 }).map((_, i) => <SkeletonRow key={i} cols={8} />)
+                ) : queue.filter(q => q.status !== "done" && q.status !== "completed").length === 0 ? (
+                  <tr>
+                    <td colSpan={8}>
+                      <div className="empty-state">
+                        <div className="empty-state-icon">
+                          <CheckCircle2 size={28} />
+                        </div>
+                        <h4 style={{ color: "#0f172a" }}>All OPD Patients Attended</h4>
+                        <p>No waiting patients in the queue right now.</p>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  queue
+                    .filter(q => q.status !== "done" && q.status !== "completed")
+                    .map((item) => {
+                      const p = item.patientId || {};
+                      const isInProgress = item.status === "in-progress";
+
+                      return (
+                        <tr key={item._id} style={isInProgress ? { backgroundColor: "#f0f7ff" } : {}}>
+                          <td>
+                            <span style={{ fontSize: "16px", fontWeight: "800", color: "#c62828" }}>
+                              #{item.queueNumber || 1}
+                            </span>
+                          </td>
+                          <td>
+                            <div>
+                              <Link
+                                href={`/patient/${p._id}`}
+                                style={{ fontWeight: "700", color: "#0f172a", display: "flex", alignItems: "center", gap: "6px" }}
+                              >
+                                <span>{p.name}</span>
+                              </Link>
+                              <span style={{ fontSize: "12px", color: "#64748b" }}>
+                                {p.patientId || "HC-000000"}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <span style={{ color: "#334155" }}>
+                              {p.age} yrs • {p.gender}
+                            </span>
+                          </td>
+                          <td>
+                            <span className="badge badge-pill">{p.bloodGroup || "O+"}</span>
+                          </td>
+                          <td>
+                            <span style={{ fontSize: "13px", fontWeight: "500" }}>
+                              {item.chiefComplaint || "General Consultation"}
+                            </span>
+                          </td>
+                          <td>
+                            <span
+                              className={`badge ${
+                                item.priority === "urgent" || item.priority === "emergency"
+                                  ? "badge-urgent"
+                                  : "badge-pill"
+                              }`}
+                            >
+                              {item.priority || "Normal"}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`badge badge-${item.status}`}>
+                              {isInProgress ? "In Consultation" : item.status}
+                            </span>
+                          </td>
+                          <td>
+                            <button
+                              onClick={() => handleStartConsultation(item)}
+                              disabled={startingId === item._id}
+                              className={`btn ${isInProgress ? "btn-primary" : "btn-primary"} btn-sm`}
+                              style={{
+                                backgroundColor: isInProgress ? "#2563eb" : "#c62828",
+                                gap: "5px",
+                              }}
+                            >
+                              <Stethoscope size={14} />
+                              <span>{isInProgress ? "Resume" : "Start Consultation"}</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: PATIENT REGISTRY */}
+      {activeTab === "patients" && (
+        <div className="card" style={{ padding: "0", overflow: "hidden" }}>
+          <div style={{ padding: "18px 22px", borderBottom: "1px solid #e2e8f0" }}>
+            <div style={{ position: "relative", maxWidth: "450px" }}>
+              <Search size={16} color="#94a3b8" style={{ position: "absolute", left: "12px", top: "12px" }} />
+              <input
+                type="text"
+                placeholder="Search patient by Name, Patient ID, or Phone..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="form-control"
+                style={{ paddingLeft: "38px" }}
+              />
+            </div>
+          </div>
+
+          <div className="table-container" style={{ border: "none" }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Patient ID</th>
+                  <th>Full Name</th>
+                  <th>Demographics</th>
+                  <th>Blood Group</th>
+                  <th>Last Visit</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {patients.length === 0 ? (
+                  <tr>
+                    <td colSpan={6}>
+                      <div className="empty-state">
+                        <Users size={28} />
+                        <h4>No patient records match query</h4>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  patients.map((p) => (
+                    <tr key={p._id}>
+                      <td>
+                        <span style={{ fontWeight: "700", color: "#c62828", fontFamily: "monospace" }}>
+                          {p.patientId || `HC-${p._id.slice(-6).toUpperCase()}`}
+                        </span>
+                      </td>
+                      <td>
+                        <Link href={`/patient/${p._id}`} style={{ fontWeight: "700", color: "#0f172a" }}>
+                          {p.name}
+                        </Link>
+                      </td>
+                      <td>{p.age} yrs • {p.gender}</td>
+                      <td>
+                        <span className="badge badge-pill">{p.bloodGroup || "Unknown"}</span>
+                      </td>
+                      <td>
+                        <span style={{ fontSize: "12px", color: "#64748b" }}>
+                          {p.lastVisit ? new Date(p.lastVisit).toLocaleDateString() : "New Patient"}
+                        </span>
+                      </td>
+                      <td>
+                        <button
+                          onClick={() => router.push(`/patient/${p._id}`)}
+                          className="btn btn-secondary btn-sm"
+                          style={{ gap: "5px" }}
+                        >
+                          <Eye size={14} />
+                          <span>Open Medical File</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: COMPLETED CONSULTATIONS */}
+      {activeTab === "consultations" && (
+        <div className="card" style={{ padding: "0", overflow: "hidden" }}>
+          <div style={{ padding: "18px 22px", borderBottom: "1px solid #e2e8f0" }}>
+            <h3 style={{ fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>
+              Completed Consultations ({completedToday.length})
+            </h3>
+          </div>
+
+          <div className="table-container" style={{ border: "none" }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Token</th>
+                  <th>Patient</th>
+                  <th>Chief Complaint</th>
+                  <th>Completed At</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {completedToday.length === 0 ? (
+                  <tr>
+                    <td colSpan={5}>
+                      <div className="empty-state">
+                        <CheckCircle2 size={28} />
+                        <h4>No consultations finished yet today</h4>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  completedToday.map((c) => (
+                    <tr key={c._id}>
+                      <td>
+                        <span style={{ fontWeight: "700", color: "#047857" }}>
+                          #{c.queueNumber}
+                        </span>
+                      </td>
+                      <td>
+                        <span style={{ fontWeight: "700" }}>{c.patientId?.name}</span>
+                        <div style={{ fontSize: "11px", color: "#64748b" }}>
+                          {c.patientId?.patientId}
+                        </div>
+                      </td>
+                      <td>{c.chiefComplaint}</td>
+                      <td>
+                        <span style={{ fontSize: "12px", color: "#64748b" }}>
+                          {c.completedAt ? new Date(c.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Completed"}
+                        </span>
+                      </td>
+                      <td>
+                        <button
+                          onClick={() => router.push(`/patient/${c.patientId?._id}`)}
+                          className="btn btn-secondary btn-sm"
+                        >
+                          <FileText size={14} />
+                          <span>View EHR</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
-}
-
-/* ---------------- STYLES ---------------- */
-
-const grid = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-  gap: "20px",
-};
-
-const card = {
-  background: "#fff",
-  padding: "16px",
-  borderRadius: "10px",
-  boxShadow: "0 4px 10px rgba(0,0,0,0.1)",
-};
-
-const name = {
-  color: "#c62828",
-  cursor: "pointer",
-};
-
-const badge = {
-  display: "inline-block",
-  marginTop: "10px",
-  padding: "6px 14px",
-  borderRadius: "20px",
-  fontSize: "12px",
-  fontWeight: "bold",
-  cursor: "pointer",
-};
-
-const button = {
-  marginTop: "14px",
-  width: "100%",
-  padding: "10px",
-  background: "#c62828",
-  color: "#fff",
-  border: "none",
-  borderRadius: "6px",
-};
-
-function badgeColor(status = "waiting") {
-  if (status === "waiting") return { background: "#ff9800", color: "#fff" };
-  if (status === "in-progress") return { background: "#2196f3", color: "#fff" };
-  if (status === "done") return { background: "#4caf50", color: "#fff" };
 }

@@ -1,177 +1,222 @@
 "use client";
 
+import React from "react";
 import { useRouter } from "next/navigation";
+import { Activity, ArrowRight, ShieldCheck } from "lucide-react";
+import Navbar from "@/components/Navbar";
+import { useAuth } from "@/context/AuthContext";
 
 export default function LandingPage() {
   const router = useRouter();
+  const { user, isAuthenticated } = useAuth();
+
+  const handleLoginClick = () => {
+    if (isAuthenticated && user) {
+      router.push(user.role === "doctor" ? "/doctor" : "/reception");
+    } else {
+      router.push("/login");
+    }
+  };
 
   return (
-    <div style={styles.container}>
-
-      {/* NAVBAR */}
-      <div style={styles.navbar}>
-        <h2 style={styles.logo}>HealthConnect</h2>
-
-        <div style={styles.navLinks}>
-          <span style={styles.link}>Home</span>
-          <span style={styles.link}>Services</span>
-          <span style={styles.link}>Doctors</span>
-          <span style={styles.link}>Contact</span>
-
-          <button
-            style={styles.loginBtn}
-            onClick={() => router.push("/login")}
-          >
-            Login
-          </button>
-        </div>
-      </div>
-
+    <div style={styles.pageContainer}>
+      <Navbar />
 
       {/* HERO SECTION */}
-      <div style={styles.hero}>
+      <main style={styles.heroWrapper}>
+        <div style={styles.heroGrid}>
+          {/* Left Content */}
+          <div style={styles.leftContent}>
+            <div style={styles.badge}>
+              <Activity size={14} color="#d62828" />
+              <span>Digital Healthcare Records</span>
+            </div>
 
-        {/* LEFT TEXT */}
-        <div style={styles.left}>
-          <h1 style={styles.title}>
-            Your Health Is <br /> Our Priority
-          </h1>
+            <h1 style={styles.mainTitle}>HealthConnect</h1>
 
-          <p style={styles.subtitle}>
-            HealthConnect is a modern hospital management system that helps
-            doctors and reception manage patient records efficiently and securely.
-          </p>
+            <h2 style={styles.subHeading}>
+              Smarter Patient Records.<br />
+              <span style={{ color: "#d62828" }}>Better Care.</span>
+            </h2>
 
-          <button
-            style={styles.cta}
-            onClick={() => router.push("/login")}
-          >
-            Get Started
-          </button>
+            <p style={styles.description}>
+              A secure digital platform for managing patient records, OPD queues,
+              consultations, prescriptions, and clinical history.
+            </p>
+
+            <div style={styles.actionRow}>
+              <button onClick={handleLoginClick} className="btn btn-primary btn-lg" style={styles.ctaButton}>
+                <span>
+                  {isAuthenticated && user
+                    ? `Open ${user.role === "doctor" ? "Doctor" : "Reception"} Station`
+                    : "Staff Login"}
+                </span>
+                <ArrowRight size={18} />
+              </button>
+
+              <div style={styles.securityNote}>
+                <ShieldCheck size={14} color="#64748b" />
+                <span>Secure access for authorized healthcare staff</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Healthcare Visual */}
+          <div style={styles.rightContent}>
+            <div style={styles.imageCard}>
+              <img
+                src="/doctor2.png"
+                alt="Doctor reviewing digital healthcare records"
+                style={styles.heroImage}
+                onError={(e) => {
+                  // Fallback to doctor.png if doctor2.png fails
+                  e.currentTarget.src = "/doctor.png";
+                }}
+              />
+            </div>
+          </div>
         </div>
+      </main>
 
-
-        {/* IMAGE */}
-        <img
-          src="/doctor.png"
-          alt="doctor"
-          style={styles.heroImage}
-        />
-
-      </div>
-
+      {/* MINIMAL FOOTER */}
+      <footer style={styles.footer}>
+        <div style={styles.footerContainer}>
+          <span>© {new Date().getFullYear()} HealthConnect</span>
+          <span style={{ margin: "0 8px", color: "#cbd5e1" }}>•</span>
+          <span>Digital Healthcare Records & OPD Management</span>
+        </div>
+      </footer>
     </div>
   );
 }
 
-
-
 const styles = {
-
-  container: {
+  pageContainer: {
     minHeight: "100vh",
-    width: "100%",
-    fontFamily: "Arial, sans-serif",
-    background: "#ffffff"
-  },
-
-
-  /* NAVBAR */
-
-  navbar: {
-    width: "100%",
-    height: "80px",
+    backgroundColor: "#f8fafc",
     display: "flex",
-    alignItems: "center",
+    flexDirection: "column",
     justifyContent: "space-between",
-    padding: "0 80px",
-    background: "#ffffff",
-    borderBottom: "1px solid #eee"
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif",
   },
-
-  logo: {
-    fontSize: "26px",
-    fontWeight: "bold",
-    color: "#d32f2f"
-  },
-
-  navLinks: {
+  heroWrapper: {
+    flex: 1,
     display: "flex",
     alignItems: "center",
-    gap: "30px"
+    justifyContent: "center",
+    padding: "36px 24px",
+    maxWidth: "1280px",
+    width: "100%",
+    margin: "0 auto",
   },
-
-  link: {
-    fontSize: "15px",
-    color: "#333",
-    cursor: "pointer"
-  },
-
-  loginBtn: {
-    padding: "10px 24px",
-    background: "#d32f2f",   // RED
-    border: "none",
-    color: "#fff",
-    borderRadius: "6px",
-    cursor: "pointer"
-  },
-
-
-  /* HERO */
-
-  hero: {
-    position: "relative",
-    height: "calc(100vh - 80px)",
-    display: "flex",
+  heroGrid: {
+    display: "grid",
+    gridTemplateColumns: "1.1fr 0.9fr",
+    gap: "56px",
     alignItems: "center",
-    paddingLeft: "80px",
-    overflow: "hidden",
-    background: "#ffffff"
+    width: "100%",
   },
-
-
-  /* LEFT TEXT */
-
-  left: {
-    width: "45%",
-    zIndex: 2
+  leftContent: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "18px",
   },
-
-  title: {
-    fontSize: "60px",
-    fontWeight: "bold",
-    marginBottom: "20px",
-    color: "#1e293b"
+  badge: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "6px 14px",
+    backgroundColor: "#fee2e2",
+    borderRadius: "9999px",
+    fontSize: "13px",
+    fontWeight: "600",
+    color: "#d62828",
+    width: "fit-content",
   },
-
-  subtitle: {
-    fontSize: "18px",
-    marginBottom: "35px",
-    maxWidth: "520px",
-    color: "#475569"
+  mainTitle: {
+    fontSize: "44px",
+    fontWeight: "900",
+    color: "#172033",
+    letterSpacing: "-0.03em",
+    lineHeight: "1.1",
+    margin: 0,
   },
-
-  cta: {
-    padding: "14px 40px",
+  subHeading: {
+    fontSize: "28px",
+    fontWeight: "700",
+    color: "#334155",
+    letterSpacing: "-0.02em",
+    lineHeight: "1.25",
+    margin: 0,
+  },
+  description: {
     fontSize: "16px",
-    background: "#d32f2f",
-    color: "#fff",
-    border: "none",
-    borderRadius: "6px",
-    cursor: "pointer"
+    lineHeight: "1.6",
+    color: "#64748b",
+    maxWidth: "500px",
+    margin: "4px 0 10px 0",
   },
-
-
-  /* IMAGE */
-
+  actionRow: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "12px",
+    alignItems: "flex-start",
+  },
+  ctaButton: {
+    backgroundColor: "#d62828",
+    padding: "14px 32px",
+    fontSize: "16px",
+    fontWeight: "700",
+    borderRadius: "10px",
+    boxShadow: "0 4px 14px rgba(214, 40, 40, 0.3)",
+    gap: "8px",
+  },
+  securityNote: {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    fontSize: "12px",
+    color: "#64748b",
+    fontWeight: "500",
+  },
+  rightContent: {
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  imageCard: {
+    width: "100%",
+    maxWidth: "480px",
+    maxHeight: "440px",
+    backgroundColor: "#ffffff",
+    borderRadius: "20px",
+    border: "1px solid #e2e8f0",
+    padding: "12px",
+    boxShadow: "0 20px 30px -10px rgba(0, 0, 0, 0.08), 0 10px 15px -3px rgba(0, 0, 0, 0.04)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
   heroImage: {
-  position: "absolute",
-  right: "60px",
-  top: "50%",
-  transform: "translateY(-50%)",
-  height: "80%",
-  maxHeight: "650px",
-  objectFit: "contain"
-}
-
+    width: "100%",
+    height: "100%",
+    maxHeight: "416px",
+    objectFit: "contain",
+    borderRadius: "14px",
+  },
+  footer: {
+    backgroundColor: "#ffffff",
+    borderTop: "1px solid #e2e8f0",
+    padding: "18px 24px",
+    textAlign: "center",
+  },
+  footerContainer: {
+    fontSize: "13px",
+    color: "#64748b",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexWrap: "wrap",
+  },
 };
