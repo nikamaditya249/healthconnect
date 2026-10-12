@@ -193,14 +193,17 @@ export const seedSamplePatients = async () => {
 };
 
 export const connectDatabase = async () => {
+  if (mongoose.connection.readyState >= 1) {
+    return;
+  }
   const mongoUri = process.env.MONGO_URI;
 
   if (mongoUri) {
     try {
       console.log("⏳ Attempting connection to MongoDB Atlas cluster...");
       await mongoose.connect(mongoUri, {
-        serverSelectionTimeoutMS: 3000,
-        connectTimeoutMS: 4000,
+        serverSelectionTimeoutMS: 5000,
+        connectTimeoutMS: 6000,
       });
       activeEngine = "MongoDB Atlas";
       console.log("✅ Connected directly to MongoDB Atlas!");
@@ -208,9 +211,16 @@ export const connectDatabase = async () => {
       await seedSamplePatients();
       return;
     } catch (err) {
-      console.warn("⚠️ MongoDB Atlas IP firewall active / timeout:", err.message);
+      console.warn("⚠️ MongoDB Atlas connection error:", err.message);
+      if (process.env.VERCEL) {
+        throw new Error(`MongoDB Atlas connection failed: ${err.message}. Please verify MONGO_URI and Atlas network access (allow 0.0.0.0/0).`);
+      }
       console.log("⚡ Auto-switching to full database engine so application stays 100% operational...");
     }
+  }
+
+  if (process.env.VERCEL) {
+    throw new Error("MONGO_URI environment variable is required on Vercel.");
   }
 
   // Fallback to embedded MongoDB server

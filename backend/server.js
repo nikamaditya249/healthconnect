@@ -45,13 +45,33 @@ app.use(
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// Static uploads directory
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
+import { uploadDir } from "./middleware/upload.js";
 import { connectDatabase, getActiveDbEngine } from "./services/db.js";
 
+// Static uploads directory
+app.use("/uploads", express.static(uploadDir));
+
+// Database connection middleware (critical for Vercel Serverless cold starts)
+let dbPromise = null;
+app.use(async (req, res, next) => {
+  if (mongoose.connection.readyState === 0) {
+    if (!dbPromise) {
+      dbPromise = connectDatabase().catch((err) => {
+        dbPromise = null;
+        throw err;
+      });
+    }
+    try {
+      await dbPromise;
+    } catch (err) {
+      return res.status(500).json({ error: "Database connection failed", details: err.message });
+    }
+  }
+  next();
+});
+
 // HEALTH CHECK
-app.get("/", (req, res) => {
+const healthHandler = (req, res) => {
   res.json({
     name: "HealthConnect Healthcare Record & OPD Platform API",
     version: "2.0.0",
@@ -59,7 +79,11 @@ app.get("/", (req, res) => {
     database: getActiveDbEngine(),
     timestamp: new Date().toISOString(),
   });
-});
+};
+
+app.get("/", healthHandler);
+app.get("/api", healthHandler);
+app.get("/api/health", healthHandler);
 
 // API ROUTES
 app.use("/api/auth", authRoutes);
