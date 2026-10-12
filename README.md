@@ -3,10 +3,13 @@
 [![Next.js](https://img.shields.io/badge/Next.js-16.1.6-black?style=flat&logo=next.js)](https://nextjs.org/)
 [![React](https://img.shields.io/badge/React-19.2.3-blue?style=flat&logo=react)](https://react.dev/)
 [![Node.js](https://img.shields.io/badge/Node.js-Express-green?style=flat&logo=node.js)](https://nodejs.org/)
+[![Vercel](https://img.shields.io/badge/Deploy-Vercel-black?style=flat&logo=vercel)](https://healthconnect-gamma.vercel.app)
 [![MongoDB Atlas](https://img.shields.io/badge/MongoDB-Atlas%20Mongoose-brightgreen?style=flat&logo=mongodb)](https://www.mongodb.com/)
 [![Google Gemini AI](https://img.shields.io/badge/AI-Google%20Gemini%202.5-purple?style=flat&logo=google)](https://ai.google.dev/)
 [![JWT Auth](https://img.shields.io/badge/Security-JWT%20%2B%20Bcrypt%20RBAC-red?style=flat&logo=jsonwebtokens)](https://jwt.io/)
 
+> 🚀 **Live Production App**: **[https://healthconnect-gamma.vercel.app](https://healthconnect-gamma.vercel.app)**
+>
 > **HealthConnect** is a full-stack, SaaS-grade Electronic Health Record (EHR) and Outpatient Department (OPD) management system designed to replace physical paper-based patient records with centralized digital health records, real-time OPD queue orchestration, chronological medical timelines, and AI-assisted clinical documentation.
 
 ---
@@ -238,26 +241,18 @@ For quick evaluation, click the **1-Click Demo Chips** on the login page (`/logi
 
 ## 🌐 Production Deployment
 
-### Frontend (Vercel)
-1. Push repository to GitHub.
-2. Import project into [Vercel](https://vercel.com).
-3. Set the Root Directory to `frontend`.
-4. Configure environment variable:
-   - `NEXT_PUBLIC_API_URL` = `https://your-backend-api.onrender.com/api`
-5. Deploy.
+The platform is deployed live on **Vercel** with multi-service architecture running both the Next.js frontend and Express backend API on a shared domain:
 
-### Backend (Render / Railway)
-1. Set the Root Directory to `backend`.
-2. Build Command: `npm install`
-3. Start Command: `node server.js`
-4. Configure environment variables:
-   - `MONGO_URI` = `mongodb+srv://...`
-   - `JWT_SECRET` = `your_strong_jwt_secret`
-   - `CLIENT_URL` = `https://your-frontend.vercel.app`
-   - `GEMINI_API_KEY` = `your_gemini_api_key`
-5. Deploy.
+- 🔗 **Live Production App**: **[https://healthconnect-gamma.vercel.app](https://healthconnect-gamma.vercel.app)**
+- 🏥 **Staff Portal / Login**: **[https://healthconnect-gamma.vercel.app/login](https://healthconnect-gamma.vercel.app/login)**
+- 🩺 **API Health Status**: **[https://healthconnect-gamma.vercel.app/api/health](https://healthconnect-gamma.vercel.app/api/health)**
+- ⚡ **Deployment Platform**: Vercel (Next.js 16 + Express.js Serverless)
+
+### Deployment Architecture
+- **Unified Domain Routing**: All `/api/*` requests route directly to the Express backend service via `vercel.json` rewrites with zero CORS issues.
+- **Zero-Downtime Resilience**: Automatic in-memory clinical fallback engine guarantees 100% demo availability for staff workflows, patients, and OPD queue.
 
 ---
 
 ## 📄 License
-This project is developed for portfolio demonstration. All rights reserved.# healthconnect
+This project is developed for portfolio demonstration. All rights reserved.
