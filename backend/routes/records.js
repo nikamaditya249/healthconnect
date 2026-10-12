@@ -6,12 +6,24 @@ import OPDVisit from "../models/OPDVisit.js";
 import AuditLog from "../models/AuditLog.js";
 import { optionalAuth } from "../middleware/auth.js";
 
+import { isFallbackActive, memoryRecords, memoryPatients, memoryUsers } from "../services/inMemoryStore.js";
+
 const router = express.Router();
 
 // GET ALL RECORDS FOR A PATIENT
 router.get(["/patient/:patientId", "/:patientId"], async (req, res) => {
   try {
     const { patientId } = req.params;
+
+    if (isFallbackActive()) {
+      const recs = memoryRecords.filter(
+        (r) =>
+          r.patientId === patientId ||
+          r.patientId?._id === patientId ||
+          r.patientId?.patientId === patientId
+      );
+      return res.json(recs);
+    }
 
     let targetPatientId = patientId;
     // Support lookup by HC-XXXXXX code as well
@@ -34,6 +46,14 @@ router.get(["/patient/:patientId", "/:patientId"], async (req, res) => {
 // GET SINGLE RECORD BY ID
 router.get("/detail/:id", async (req, res) => {
   try {
+    if (isFallbackActive()) {
+      const record = memoryRecords.find((r) => r._id === req.params.id);
+      if (!record) {
+        return res.status(404).json({ error: "Medical record not found" });
+      }
+      return res.json(record);
+    }
+
     const record = await Record.findById(req.params.id)
       .populate("patientId")
       .populate("doctorId", "name employeeId specialization department");
@@ -68,6 +88,31 @@ router.post("/", optionalAuth, async (req, res) => {
 
     if (!patientId || !diagnosis) {
       return res.status(400).json({ error: "Patient ID and Diagnosis are required." });
+    }
+
+    if (isFallbackActive()) {
+      const p = memoryPatients.find(
+        (pt) => pt._id === patientId || pt.patientId === patientId
+      );
+      if (p) p.status = "done";
+      const newRec = {
+        _id: "60d0fe4f5311236168a109" + (memoryRecords.length + 50),
+        patientId,
+        visitId,
+        doctorId: req.user?._id || memoryUsers[0]._id,
+        doctorName: req.user?.name || doctorName || "Dr. Alok Sharma",
+        chiefComplaint: chiefComplaint || "",
+        symptoms: symptoms || "",
+        duration: duration || "",
+        diagnosis: diagnosis.trim(),
+        vitals: vitals || {},
+        medicines: medicines || [],
+        doctorNotes: doctorNotes || "",
+        followUpDate: followUpDate || "",
+        createdAt: new Date().toISOString(),
+      };
+      memoryRecords.unshift(newRec);
+      return res.status(201).json(newRec);
     }
 
     const patient = await Patient.findById(patientId);

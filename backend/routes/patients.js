@@ -4,12 +4,40 @@ import Patient from "../models/Patient.js";
 import AuditLog from "../models/AuditLog.js";
 import { optionalAuth } from "../middleware/auth.js";
 
+import { isFallbackActive, memoryPatients } from "../services/inMemoryStore.js";
+
 const router = express.Router();
 
 // GET ALL / SEARCH PATIENTS
 router.get("/", async (req, res) => {
   try {
     const { search = "", bloodGroup, gender, page = 1, limit = 50 } = req.query;
+
+    if (isFallbackActive()) {
+      let filtered = [...memoryPatients];
+      if (search && search.trim()) {
+        const q = search.trim().toLowerCase();
+        filtered = filtered.filter(
+          (p) =>
+            p.name.toLowerCase().includes(q) ||
+            p.patientId.toLowerCase().includes(q) ||
+            (p.phone && p.phone.toLowerCase().includes(q))
+        );
+      }
+      if (bloodGroup && bloodGroup !== "all") {
+        filtered = filtered.filter((p) => p.bloodGroup === bloodGroup);
+      }
+      if (gender && gender !== "all") {
+        filtered = filtered.filter((p) => p.gender.toLowerCase() === gender.toLowerCase());
+      }
+      return res.json({
+        patients: filtered,
+        total: filtered.length,
+        page: 1,
+        totalPages: 1,
+      });
+    }
+
     const filter = {};
 
     if (search.trim()) {
@@ -64,6 +92,15 @@ router.get("/", async (req, res) => {
 router.get("/:id", async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (isFallbackActive()) {
+      const patient = memoryPatients.find(
+        (p) => p._id === id || (p.patientId && p.patientId.toUpperCase() === id.toUpperCase())
+      );
+      if (!patient) return res.status(404).json({ error: "Patient not found" });
+      return res.json(patient);
+    }
+
     let patient = null;
 
     if (mongoose.Types.ObjectId.isValid(id)) {
@@ -107,6 +144,27 @@ router.post(["/", "/add"], optionalAuth, async (req, res) => {
 
     if (!name || age === undefined || !gender) {
       return res.status(400).json({ error: "Name, age, and gender are required fields." });
+    }
+
+    if (isFallbackActive()) {
+      const newP = {
+        _id: "60d0fe4f5311236168a109" + (memoryPatients.length + 10),
+        patientId: `HC-${String(memoryPatients.length + 1).padStart(6, "0")}`,
+        name: name.trim(),
+        age: Number(age),
+        gender: gender.trim(),
+        bloodGroup: bloodGroup || "Unknown",
+        phone: phone ? phone.trim() : "",
+        address: address ? address.trim() : "",
+        emergencyContact: emergencyContact || { name: "", relationship: "", phone: "" },
+        allergies: allergies || [],
+        chronicConditions: chronicConditions || [],
+        status: "waiting",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      memoryPatients.unshift(newP);
+      return res.status(201).json(newP);
     }
 
     // Duplicate check on phone if phone is provided
@@ -172,6 +230,16 @@ router.post(["/", "/add"], optionalAuth, async (req, res) => {
 // UPDATE PATIENT
 router.put("/:id", optionalAuth, async (req, res) => {
   try {
+    if (isFallbackActive()) {
+      const { id } = req.params;
+      const idx = memoryPatients.findIndex(
+        (p) => p._id === id || (p.patientId && p.patientId.toUpperCase() === id.toUpperCase())
+      );
+      if (idx === -1) return res.status(404).json({ error: "Patient not found" });
+      memoryPatients[idx] = { ...memoryPatients[idx], ...req.body, updatedAt: new Date().toISOString() };
+      return res.json(memoryPatients[idx]);
+    }
+
     const updated = await Patient.findByIdAndUpdate(
       req.params.id,
       { $set: req.body },

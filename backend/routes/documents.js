@@ -4,6 +4,8 @@ import { upload } from "../middleware/upload.js";
 import { optionalAuth } from "../middleware/auth.js";
 import AuditLog from "../models/AuditLog.js";
 
+import { isFallbackActive, memoryDocuments } from "../services/inMemoryStore.js";
+
 const router = express.Router();
 
 // UPLOAD MEDICAL DOCUMENT
@@ -20,6 +22,25 @@ router.post("/upload", optionalAuth, upload.single("file"), async (req, res) => 
     }
 
     const fileUrl = `/uploads/${req.file.filename}`;
+
+    if (isFallbackActive()) {
+      const newDoc = {
+        _id: "60d0fe4f5311236168a109" + (memoryDocuments.length + 70),
+        patientId,
+        uploadedBy: req.user?._id || null,
+        uploadedByName: req.user?.name || "Healthcare Staff",
+        title: title.trim(),
+        documentType: documentType || "lab_report",
+        fileName: req.file.originalname,
+        fileUrl,
+        fileSize: req.file.size,
+        mimeType: req.file.mimetype,
+        extractedText: extractedText || "",
+        createdAt: new Date().toISOString(),
+      };
+      memoryDocuments.unshift(newDoc);
+      return res.status(201).json(newDoc);
+    }
 
     const newDoc = new Document({
       patientId,
@@ -55,6 +76,11 @@ router.post("/upload", optionalAuth, upload.single("file"), async (req, res) => 
 // GET DOCUMENTS FOR A PATIENT
 router.get("/patient/:patientId", async (req, res) => {
   try {
+    if (isFallbackActive()) {
+      const docs = memoryDocuments.filter((d) => d.patientId === req.params.patientId);
+      return res.json(docs);
+    }
+
     const docs = await Document.find({ patientId: req.params.patientId }).sort({
       createdAt: -1,
     });
@@ -68,6 +94,12 @@ router.get("/patient/:patientId", async (req, res) => {
 // DELETE DOCUMENT
 router.delete("/:id", optionalAuth, async (req, res) => {
   try {
+    if (isFallbackActive()) {
+      const idx = memoryDocuments.findIndex((d) => d._id === req.params.id);
+      if (idx !== -1) memoryDocuments.splice(idx, 1);
+      return res.json({ success: true, message: "Document removed successfully" });
+    }
+
     const doc = await Document.findByIdAndDelete(req.params.id);
     if (!doc) {
       return res.status(404).json({ error: "Document not found" });

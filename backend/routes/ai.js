@@ -2,6 +2,7 @@ import express from "express";
 import { GoogleGenAI } from "@google/genai";
 import Patient from "../models/Patient.js";
 import Record from "../models/Record.js";
+import { isFallbackActive, memoryPatients, memoryRecords } from "../services/inMemoryStore.js";
 
 const router = express.Router();
 
@@ -25,12 +26,24 @@ router.post("/patient-summary", async (req, res) => {
       return res.status(400).json({ error: "patientId is required" });
     }
 
-    const patient = await Patient.findById(patientId);
-    if (!patient) {
-      return res.status(404).json({ error: "Patient not found" });
-    }
+    let patient = null;
+    let records = [];
 
-    const records = await Record.find({ patientId }).sort({ createdAt: -1 });
+    if (isFallbackActive()) {
+      patient = memoryPatients.find((p) => p._id === patientId || p.patientId === patientId);
+      if (!patient) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
+      records = memoryRecords.filter(
+        (r) => r.patientId === patientId || r.patientId?._id === patientId
+      );
+    } else {
+      patient = await Patient.findById(patientId);
+      if (!patient) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
+      records = await Record.find({ patientId }).sort({ createdAt: -1 });
+    }
 
     if (records.length === 0) {
       return res.json({
@@ -214,8 +227,18 @@ router.post("/record-search", async (req, res) => {
       return res.status(400).json({ error: "patientId and query are required" });
     }
 
-    const patient = await Patient.findById(patientId);
-    const records = await Record.find({ patientId }).sort({ createdAt: -1 });
+    let patient = null;
+    let records = [];
+
+    if (isFallbackActive()) {
+      patient = memoryPatients.find((p) => p._id === patientId || p.patientId === patientId);
+      records = memoryRecords.filter(
+        (r) => r.patientId === patientId || r.patientId?._id === patientId
+      );
+    } else {
+      patient = await Patient.findById(patientId);
+      records = await Record.find({ patientId }).sort({ createdAt: -1 });
+    }
 
     if (records.length === 0) {
       return res.json({

@@ -7,6 +7,8 @@ import AuditLog from "../models/AuditLog.js";
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "healthconnect_fallback_jwt_secret_key_2026";
 
+import { isFallbackActive, memoryUsers } from "../services/inMemoryStore.js";
+
 // Auto-seed demo staff if database is fresh
 export const seedDefaultUsers = async () => {
   try {
@@ -47,6 +49,39 @@ router.post("/login", async (req, res) => {
 
     if (!identifier || !password) {
       return res.status(400).json({ error: "Please enter your Employee ID / Email and password." });
+    }
+
+    if (isFallbackActive()) {
+      const cleanId = identifier.trim().toLowerCase();
+      const user = memoryUsers.find(
+        (u) =>
+          u.email.toLowerCase() === cleanId ||
+          u.employeeId.toUpperCase() === identifier.trim().toUpperCase()
+      );
+      if (!user) {
+        return res.status(401).json({ error: "Invalid credentials. Staff account not found." });
+      }
+      if (user.password !== password) {
+        return res.status(401).json({ error: "Incorrect password. Please try again." });
+      }
+      const token = jwt.sign(
+        { id: user._id, role: user.role, employeeId: user.employeeId },
+        JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+      return res.json({
+        success: true,
+        token,
+        user: {
+          _id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          employeeId: user.employeeId,
+          department: user.department,
+          specialization: user.specialization,
+        },
+      });
     }
 
     const cleanIdentifier = identifier.trim().toLowerCase();

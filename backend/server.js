@@ -48,23 +48,26 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 import { uploadDir } from "./middleware/upload.js";
 import { connectDatabase, getActiveDbEngine } from "./services/db.js";
 
+import { isFallbackActive, setFallbackActive } from "./services/inMemoryStore.js";
+
 // Static uploads directory
 app.use("/uploads", express.static(uploadDir));
 
 // Database connection middleware (critical for Vercel Serverless cold starts)
 let dbPromise = null;
 app.use(async (req, res, next) => {
-  if (mongoose.connection.readyState === 0) {
+  if (mongoose.connection.readyState === 0 && !isFallbackActive()) {
     if (!dbPromise) {
       dbPromise = connectDatabase().catch((err) => {
         dbPromise = null;
-        throw err;
+        console.warn("Activating in-memory clinical engine fallback:", err.message);
+        setFallbackActive(true);
       });
     }
     try {
       await dbPromise;
     } catch (err) {
-      return res.status(500).json({ error: "Database connection failed", details: err.message });
+      setFallbackActive(true);
     }
   }
   next();

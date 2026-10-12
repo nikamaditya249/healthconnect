@@ -1,6 +1,8 @@
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 
+import { isFallbackActive, memoryUsers } from "../services/inMemoryStore.js";
+
 const JWT_SECRET = process.env.JWT_SECRET || "healthconnect_fallback_jwt_secret_key_2026";
 
 export const authenticateUser = async (req, res, next) => {
@@ -12,6 +14,15 @@ export const authenticateUser = async (req, res, next) => {
 
     const token = authHeader.split(" ")[1];
     const decoded = jwt.verify(token, JWT_SECRET);
+
+    if (isFallbackActive()) {
+      const user = memoryUsers.find((u) => u._id === decoded.id || u.employeeId === decoded.employeeId);
+      if (!user) {
+        return res.status(401).json({ error: "Invalid token or user not found." });
+      }
+      req.user = user;
+      return next();
+    }
 
     const user = await User.findById(decoded.id).select("-password");
     if (!user || !user.isActive) {
@@ -42,8 +53,13 @@ export const optionalAuth = async (req, res, next) => {
     if (authHeader && authHeader.startsWith("Bearer ")) {
       const token = authHeader.split(" ")[1];
       const decoded = jwt.verify(token, JWT_SECRET);
-      const user = await User.findById(decoded.id).select("-password");
-      if (user) req.user = user;
+      if (isFallbackActive()) {
+        const user = memoryUsers.find((u) => u._id === decoded.id || u.employeeId === decoded.employeeId);
+        if (user) req.user = user;
+      } else {
+        const user = await User.findById(decoded.id).select("-password");
+        if (user) req.user = user;
+      }
     }
   } catch (e) {
     // Continue without user

@@ -4,12 +4,23 @@ import Patient from "../models/Patient.js";
 import AuditLog from "../models/AuditLog.js";
 import { optionalAuth } from "../middleware/auth.js";
 
+import { isFallbackActive, memoryOPDVisits, memoryPatients } from "../services/inMemoryStore.js";
+
 const router = express.Router();
 
 // GET TODAY'S OPD QUEUE
 router.get("/queue", async (req, res) => {
   try {
     const { status } = req.query;
+
+    if (isFallbackActive()) {
+      let q = [...memoryOPDVisits];
+      if (status && status !== "all") {
+        q = q.filter((v) => v.status === status);
+      }
+      return res.json(q);
+    }
+
     const filter = {};
 
     if (status && status !== "all") {
@@ -37,6 +48,19 @@ router.get("/queue", async (req, res) => {
 // GET QUEUE STATS
 router.get("/stats", async (req, res) => {
   try {
+    if (isFallbackActive()) {
+      const waitingCount = memoryOPDVisits.filter((v) => v.status === "waiting").length;
+      const inProgressCount = memoryOPDVisits.filter((v) => v.status === "in-progress").length;
+      const completedCount = memoryPatients.filter((p) => p.status === "done").length;
+      return res.json({
+        today: memoryOPDVisits.length + completedCount,
+        waiting: waitingCount,
+        inProgress: inProgressCount,
+        completed: completedCount,
+        totalPatients: memoryPatients.length,
+      });
+    }
+
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
 
@@ -69,6 +93,26 @@ router.post(["/visit", "/add"], optionalAuth, async (req, res) => {
 
     if (!patientId) {
       return res.status(400).json({ error: "patientId is required" });
+    }
+
+    if (isFallbackActive()) {
+      const p = memoryPatients.find(
+        (pt) => pt._id === patientId || pt.patientId === patientId
+      );
+      if (!p) return res.status(404).json({ error: "Patient record not found" });
+      const newV = {
+        _id: "60d0fe4f5311236168a109" + (memoryOPDVisits.length + 30),
+        patientId: p,
+        queueNumber: memoryOPDVisits.length + 1,
+        chiefComplaint: chiefComplaint || "General OPD Consultation",
+        priority: priority || "normal",
+        status: "waiting",
+        visitDate: new Date(),
+        createdAt: new Date().toISOString(),
+      };
+      p.status = "waiting";
+      memoryOPDVisits.unshift(newV);
+      return res.status(201).json(newV);
     }
 
     // Check if patient exists
@@ -140,6 +184,16 @@ router.put(["/visit/:id/status", "/:id/complete", "/:id/status"], optionalAuth, 
 
     if (!nextStatus) {
       return res.status(400).json({ error: "Status is required" });
+    }
+
+    if (isFallbackActive()) {
+      const v = memoryOPDVisits.find((item) => item._id === id);
+      if (v) {
+        v.status = nextStatus;
+        if (v.patientId) v.patientId.status = nextStatus;
+        return res.json(v);
+      }
+      return res.json({ _id: id, status: nextStatus });
     }
 
     const updateFields = { status: nextStatus };
