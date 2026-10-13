@@ -113,7 +113,31 @@ export default function ReceptionDashboard() {
         bloodGroup: bloodFilter,
         limit: 100,
       });
-      setPatients(data.patients || []);
+      let list = data.patients || [];
+      // Merge with custom patients in localStorage to prevent loss during serverless cold starts
+      try {
+        const stored = JSON.parse(localStorage.getItem("healthconnect_custom_patients") || "[]");
+        const existingIds = new Set(list.map((p) => p.patientId || p._id));
+        const missing = stored.filter((p) => !existingIds.has(p.patientId) && !existingIds.has(p._id));
+        if (missing.length > 0) {
+          list = [...missing, ...list];
+        }
+      } catch (e) {}
+
+      if (searchQuery && searchQuery.trim()) {
+        const q = searchQuery.trim().toLowerCase();
+        list = list.filter(
+          (p) =>
+            p.name?.toLowerCase().includes(q) ||
+            p.patientId?.toLowerCase().includes(q) ||
+            (p.phone && p.phone.toLowerCase().includes(q))
+        );
+      }
+      if (bloodFilter && bloodFilter !== "all") {
+        list = list.filter((p) => p.bloodGroup === bloodFilter);
+      }
+
+      setPatients(list);
     } catch (err) {
       console.error("Error fetching patients:", err);
     } finally {
@@ -156,6 +180,17 @@ export default function ReceptionDashboard() {
       };
 
       const newPatient = await registerPatient(payload);
+
+      // Cache locally to ensure patient is never lost across serverless cold starts
+      try {
+        const stored = JSON.parse(localStorage.getItem("healthconnect_custom_patients") || "[]");
+        const exists = stored.some((p) => p.patientId === newPatient.patientId || p._id === newPatient._id);
+        if (!exists) {
+          stored.unshift(newPatient);
+          localStorage.setItem("healthconnect_custom_patients", JSON.stringify(stored));
+        }
+      } catch (e) {}
+
       addToast(`Patient registered successfully with ID: ${newPatient.patientId}`, "success");
       setShowRegisterModal(false);
       setRegisterForm({
@@ -194,7 +229,8 @@ export default function ReceptionDashboard() {
     setCreatingVisit(true);
     try {
       const payload = {
-        patientId: selectedPatientForVisit._id,
+        patientId: selectedPatientForVisit._id || selectedPatientForVisit.patientId,
+        patientData: selectedPatientForVisit,
         chiefComplaint: visitForm.chiefComplaint,
         priority: visitForm.priority,
       };

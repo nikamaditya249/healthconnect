@@ -101,12 +101,27 @@ export default function PatientProfilePage() {
     if (!id) return;
     try {
       setLoading(true);
-      const [patientData, recordsData, docsData] = await Promise.all([
-        getPatientById(id),
-        getPatientRecords(id),
-        getPatientDocuments(id),
+      let pData = null;
+      try {
+        pData = await getPatientById(id);
+      } catch (pErr) {
+        // Fallback to locally stored custom patients if serverless container hasn't synced
+        try {
+          const stored = JSON.parse(localStorage.getItem("healthconnect_custom_patients") || "[]");
+          pData = stored.find(
+            (p) =>
+              (p._id && String(p._id) === String(id)) ||
+              (p.patientId && String(p.patientId).toUpperCase() === String(id).toUpperCase())
+          );
+        } catch (e) {}
+        if (!pData) throw pErr;
+      }
+
+      const [recordsData, docsData] = await Promise.all([
+        getPatientRecords(id).catch(() => []),
+        getPatientDocuments(id).catch(() => []),
       ]);
-      setPatient(patientData);
+      setPatient(pData);
       setRecords(recordsData || []);
       setDocuments(docsData || []);
     } catch (err) {
@@ -624,7 +639,7 @@ export default function PatientProfilePage() {
             ) : (
               <div style={{ padding: "20px", textAlign: "center", color: "#6b21a8" }}>
                 <p style={{ fontSize: "14px" }}>
-                  Click <strong>"Generate AI Summary"</strong> to synthesize all historical visits, recurring symptoms, and active medications using Google Gemini.
+                  Click <strong>&quot;Generate AI Summary&quot;</strong> to synthesize all historical visits, recurring symptoms, and active medications using Google Gemini.
                 </p>
               </div>
             )}
@@ -637,7 +652,7 @@ export default function PatientProfilePage() {
               <span>AI Record Search & Clinical Inquiries</span>
             </h3>
             <p style={{ fontSize: "13px", color: "#64748b", marginBottom: "14px" }}>
-              Ask natural-language questions scoped strictly across this patient's existing consultations and prescriptions.
+              Ask natural-language questions scoped strictly across this patient&apos;s existing consultations and prescriptions.
             </p>
 
             <form onSubmit={handleAISearch} style={{ display: "flex", gap: "10px" }}>
@@ -694,7 +709,7 @@ export default function PatientProfilePage() {
             <div className="empty-state">
               <Clock size={32} />
               <h4>No Historical Medical Records Yet</h4>
-              <p>Add a new consultation to start building this patient's digital health timeline.</p>
+              <p>Add a new consultation to start building this patient&apos;s digital health timeline.</p>
             </div>
           ) : (
             <div className="timeline-container">
@@ -769,7 +784,7 @@ export default function PatientProfilePage() {
 
                     {r.doctorNotes && (
                       <div style={{ fontSize: "12px", color: "#64748b", marginTop: "8px", fontStyle: "italic" }}>
-                        Doctor Notes: "{r.doctorNotes}"
+                        Doctor Notes: &quot;{r.doctorNotes}&quot;
                       </div>
                     )}
                   </div>
@@ -1165,7 +1180,7 @@ export default function PatientProfilePage() {
                 {/* Doctor Notes & Follow up */}
                 <div className="form-row">
                   <div className="form-group" style={{ flex: 2 }}>
-                    <label className="form-label">Doctor's Clinical Notes</label>
+                    <label className="form-label">Doctor&apos;s Clinical Notes</label>
                     <textarea
                       placeholder="Advice, dietary instructions, or clinical observations..."
                       value={consultForm.doctorNotes}

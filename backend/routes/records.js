@@ -6,7 +6,14 @@ import OPDVisit from "../models/OPDVisit.js";
 import AuditLog from "../models/AuditLog.js";
 import { optionalAuth } from "../middleware/auth.js";
 
-import { isFallbackActive, memoryRecords, memoryPatients, memoryUsers } from "../services/inMemoryStore.js";
+import {
+  isFallbackActive,
+  memoryRecords,
+  memoryPatients,
+  memoryUsers,
+  saveMemoryState,
+  loadMemoryState,
+} from "../services/inMemoryStore.js";
 
 const router = express.Router();
 
@@ -16,12 +23,21 @@ router.get(["/patient/:patientId", "/:patientId"], async (req, res) => {
     const { patientId } = req.params;
 
     if (isFallbackActive()) {
-      const recs = memoryRecords.filter(
+      let recs = memoryRecords.filter(
         (r) =>
-          r.patientId === patientId ||
-          r.patientId?._id === patientId ||
-          r.patientId?.patientId === patientId
+          (r.patientId && String(r.patientId) === String(patientId)) ||
+          (r.patientId?._id && String(r.patientId._id) === String(patientId)) ||
+          (r.patientId?.patientId && String(r.patientId.patientId).toUpperCase() === String(patientId).toUpperCase())
       );
+      if (recs.length === 0) {
+        loadMemoryState();
+        recs = memoryRecords.filter(
+          (r) =>
+            (r.patientId && String(r.patientId) === String(patientId)) ||
+            (r.patientId?._id && String(r.patientId._id) === String(patientId)) ||
+            (r.patientId?.patientId && String(r.patientId.patientId).toUpperCase() === String(patientId).toUpperCase())
+        );
+      }
       return res.json(recs);
     }
 
@@ -91,9 +107,19 @@ router.post("/", optionalAuth, async (req, res) => {
     }
 
     if (isFallbackActive()) {
-      const p = memoryPatients.find(
-        (pt) => pt._id === patientId || pt.patientId === patientId
+      let p = memoryPatients.find(
+        (pt) =>
+          (pt._id && String(pt._id) === String(patientId)) ||
+          (pt.patientId && String(pt.patientId).toUpperCase() === String(patientId).toUpperCase())
       );
+      if (!p) {
+        loadMemoryState();
+        p = memoryPatients.find(
+          (pt) =>
+            (pt._id && String(pt._id) === String(patientId)) ||
+            (pt.patientId && String(pt.patientId).toUpperCase() === String(patientId).toUpperCase())
+        );
+      }
       if (p) p.status = "done";
       const newRec = {
         _id: "60d0fe4f5311236168a109" + (memoryRecords.length + 50),
@@ -112,10 +138,17 @@ router.post("/", optionalAuth, async (req, res) => {
         createdAt: new Date().toISOString(),
       };
       memoryRecords.unshift(newRec);
+      saveMemoryState();
       return res.status(201).json(newRec);
     }
 
-    const patient = await Patient.findById(patientId);
+    let patient = null;
+    if (mongoose.Types.ObjectId.isValid(patientId)) {
+      patient = await Patient.findById(patientId);
+    }
+    if (!patient) {
+      patient = await Patient.findOne({ patientId: String(patientId).toUpperCase() });
+    }
     if (!patient) {
       return res.status(404).json({ error: "Patient not found" });
     }
@@ -132,7 +165,7 @@ router.post("/", optionalAuth, async (req, res) => {
     }
 
     const newRecord = new Record({
-      patientId,
+      patientId: patient._id,
       visitId: visitId || null,
       doctorId: resolvedDoctorId,
       doctorName: resolvedDoctorName,

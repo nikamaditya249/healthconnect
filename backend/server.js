@@ -96,8 +96,10 @@ app.use("/api/records", recordRoutes);
 app.use("/api/documents", documentRoutes);
 app.use("/api/ai", aiRoutes);
 
-// BACKWARD COMPATIBILITY
+// BACKWARD COMPATIBILITY & ROUTE ALIASES
 app.use("/api/appointments", opdRoutes);
+app.use("/api/visits", opdRoutes);
+app.use("/api/visit", opdRoutes);
 
 // GLOBAL 404 HANDLER
 app.use((req, res) => {

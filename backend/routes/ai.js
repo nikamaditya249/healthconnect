@@ -1,8 +1,9 @@
 import express from "express";
+import mongoose from "mongoose";
 import { GoogleGenAI } from "@google/genai";
 import Patient from "../models/Patient.js";
 import Record from "../models/Record.js";
-import { isFallbackActive, memoryPatients, memoryRecords } from "../services/inMemoryStore.js";
+import { isFallbackActive, memoryPatients, memoryRecords, loadMemoryState } from "../services/inMemoryStore.js";
 
 const router = express.Router();
 
@@ -30,19 +31,39 @@ router.post("/patient-summary", async (req, res) => {
     let records = [];
 
     if (isFallbackActive()) {
-      patient = memoryPatients.find((p) => p._id === patientId || p.patientId === patientId);
+      patient = memoryPatients.find(
+        (p) =>
+          (p._id && String(p._id) === String(patientId)) ||
+          (p.patientId && String(p.patientId).toUpperCase() === String(patientId).toUpperCase())
+      );
+      if (!patient) {
+        loadMemoryState();
+        patient = memoryPatients.find(
+          (p) =>
+            (p._id && String(p._id) === String(patientId)) ||
+            (p.patientId && String(p.patientId).toUpperCase() === String(patientId).toUpperCase())
+        );
+      }
       if (!patient) {
         return res.status(404).json({ error: "Patient not found" });
       }
       records = memoryRecords.filter(
-        (r) => r.patientId === patientId || r.patientId?._id === patientId
+        (r) =>
+          (r.patientId && String(r.patientId) === String(patientId)) ||
+          (r.patientId?._id && String(r.patientId._id) === String(patientId)) ||
+          (r.patientId?.patientId && String(r.patientId.patientId).toUpperCase() === String(patientId).toUpperCase())
       );
     } else {
-      patient = await Patient.findById(patientId);
+      if (mongoose.Types.ObjectId.isValid(patientId)) {
+        patient = await Patient.findById(patientId);
+      }
+      if (!patient) {
+        patient = await Patient.findOne({ patientId: String(patientId).toUpperCase() });
+      }
       if (!patient) {
         return res.status(404).json({ error: "Patient not found" });
       }
-      records = await Record.find({ patientId }).sort({ createdAt: -1 });
+      records = await Record.find({ patientId: patient._id }).sort({ createdAt: -1 });
     }
 
     if (records.length === 0) {
@@ -231,13 +252,35 @@ router.post("/record-search", async (req, res) => {
     let records = [];
 
     if (isFallbackActive()) {
-      patient = memoryPatients.find((p) => p._id === patientId || p.patientId === patientId);
+      patient = memoryPatients.find(
+        (p) =>
+          (p._id && String(p._id) === String(patientId)) ||
+          (p.patientId && String(p.patientId).toUpperCase() === String(patientId).toUpperCase())
+      );
+      if (!patient) {
+        loadMemoryState();
+        patient = memoryPatients.find(
+          (p) =>
+            (p._id && String(p._id) === String(patientId)) ||
+            (p.patientId && String(p.patientId).toUpperCase() === String(patientId).toUpperCase())
+        );
+      }
       records = memoryRecords.filter(
-        (r) => r.patientId === patientId || r.patientId?._id === patientId
+        (r) =>
+          (r.patientId && String(r.patientId) === String(patientId)) ||
+          (r.patientId?._id && String(r.patientId._id) === String(patientId)) ||
+          (r.patientId?.patientId && String(r.patientId.patientId).toUpperCase() === String(patientId).toUpperCase())
       );
     } else {
-      patient = await Patient.findById(patientId);
-      records = await Record.find({ patientId }).sort({ createdAt: -1 });
+      if (mongoose.Types.ObjectId.isValid(patientId)) {
+        patient = await Patient.findById(patientId);
+      }
+      if (!patient) {
+        patient = await Patient.findOne({ patientId: String(patientId).toUpperCase() });
+      }
+      if (patient) {
+        records = await Record.find({ patientId: patient._id }).sort({ createdAt: -1 });
+      }
     }
 
     if (records.length === 0) {

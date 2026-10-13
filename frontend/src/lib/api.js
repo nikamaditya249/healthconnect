@@ -86,7 +86,18 @@ export const getOPDStats = async () => {
 };
 
 export const createOPDVisit = async (visitData) => {
-  return safeRequest(() => apiClient.post("/opd/visit", visitData), "Failed to enqueue patient");
+  try {
+    return await safeRequest(() => apiClient.post("/opd/visit", visitData), "Failed to enqueue patient");
+  } catch (err) {
+    if (err.status === 404 || err.response?.status === 404) {
+      try {
+        return await safeRequest(() => apiClient.post("/visits", visitData), "Failed to enqueue patient");
+      } catch {
+        return await safeRequest(() => apiClient.post("/appointments", visitData), "Failed to enqueue patient");
+      }
+    }
+    throw err;
+  }
 };
 
 export const updateOPDStatus = async (visitId, status) => {

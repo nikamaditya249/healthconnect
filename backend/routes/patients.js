@@ -4,7 +4,12 @@ import Patient from "../models/Patient.js";
 import AuditLog from "../models/AuditLog.js";
 import { optionalAuth } from "../middleware/auth.js";
 
-import { isFallbackActive, memoryPatients } from "../services/inMemoryStore.js";
+import {
+  isFallbackActive,
+  memoryPatients,
+  saveMemoryState,
+  loadMemoryState,
+} from "../services/inMemoryStore.js";
 
 const router = express.Router();
 
@@ -14,6 +19,7 @@ router.get("/", async (req, res) => {
     const { search = "", bloodGroup, gender, page = 1, limit = 50 } = req.query;
 
     if (isFallbackActive()) {
+      loadMemoryState();
       let filtered = [...memoryPatients];
       if (search && search.trim()) {
         const q = search.trim().toLowerCase();
@@ -94,9 +100,19 @@ router.get("/:id", async (req, res) => {
     const { id } = req.params;
 
     if (isFallbackActive()) {
-      const patient = memoryPatients.find(
-        (p) => p._id === id || (p.patientId && p.patientId.toUpperCase() === id.toUpperCase())
+      let patient = memoryPatients.find(
+        (p) =>
+          (p._id && String(p._id) === String(id)) ||
+          (p.patientId && String(p.patientId).toUpperCase() === String(id).toUpperCase())
       );
+      if (!patient) {
+        loadMemoryState();
+        patient = memoryPatients.find(
+          (p) =>
+            (p._id && String(p._id) === String(id)) ||
+            (p.patientId && String(p.patientId).toUpperCase() === String(id).toUpperCase())
+        );
+      }
       if (!patient) return res.status(404).json({ error: "Patient not found" });
       return res.json(patient);
     }
@@ -107,7 +123,7 @@ router.get("/:id", async (req, res) => {
       patient = await Patient.findById(id);
     }
     if (!patient) {
-      patient = await Patient.findOne({ patientId: id.toUpperCase() });
+      patient = await Patient.findOne({ patientId: String(id).toUpperCase() });
     }
 
     if (!patient) {
@@ -147,9 +163,28 @@ router.post(["/", "/add"], optionalAuth, async (req, res) => {
     }
 
     if (isFallbackActive()) {
+      loadMemoryState();
+
+      // Duplicate check on phone if phone is provided
+      if (phone && phone.trim()) {
+        const existing = memoryPatients.find(
+          (p) =>
+            p.phone &&
+            p.phone.trim() === phone.trim() &&
+            p.name.toLowerCase() === name.trim().toLowerCase()
+        );
+        if (existing) {
+          return res.status(409).json({
+            error: `Patient already registered with ID: ${existing.patientId || existing._id}`,
+            patient: existing,
+          });
+        }
+      }
+
+      const generatedId = `HC-${String(memoryPatients.length + 1).padStart(6, "0")}`;
       const newP = {
-        _id: "60d0fe4f5311236168a109" + (memoryPatients.length + 10),
-        patientId: `HC-${String(memoryPatients.length + 1).padStart(6, "0")}`,
+        _id: "60d0fe4f5311236168a109" + String(memoryPatients.length + 10).padStart(2, "0"),
+        patientId: generatedId,
         name: name.trim(),
         age: Number(age),
         gender: gender.trim(),
@@ -157,13 +192,22 @@ router.post(["/", "/add"], optionalAuth, async (req, res) => {
         phone: phone ? phone.trim() : "",
         address: address ? address.trim() : "",
         emergencyContact: emergencyContact || { name: "", relationship: "", phone: "" },
-        allergies: allergies || [],
-        chronicConditions: chronicConditions || [],
+        allergies: Array.isArray(allergies)
+          ? allergies
+          : typeof allergies === "string" && allergies.trim()
+          ? allergies.split(",").map((s) => s.trim())
+          : [],
+        chronicConditions: Array.isArray(chronicConditions)
+          ? chronicConditions
+          : typeof chronicConditions === "string" && chronicConditions.trim()
+          ? chronicConditions.split(",").map((s) => s.trim())
+          : [],
         status: "waiting",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
       memoryPatients.unshift(newP);
+      saveMemoryState();
       return res.status(201).json(newP);
     }
 
@@ -237,6 +281,7 @@ router.put("/:id", optionalAuth, async (req, res) => {
       );
       if (idx === -1) return res.status(404).json({ error: "Patient not found" });
       memoryPatients[idx] = { ...memoryPatients[idx], ...req.body, updatedAt: new Date().toISOString() };
+      saveMemoryState();
       return res.json(memoryPatients[idx]);
     }
 

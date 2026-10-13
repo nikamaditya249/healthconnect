@@ -1,6 +1,13 @@
 import bcrypt from "bcryptjs";
+import fs from "fs";
+import path from "path";
 
 let fallbackActive = false;
+
+const TMP_DIR = "/tmp";
+const PATIENTS_FILE = path.join(TMP_DIR, "healthconnect_patients.json");
+const VISITS_FILE = path.join(TMP_DIR, "healthconnect_visits.json");
+const RECORDS_FILE = path.join(TMP_DIR, "healthconnect_records.json");
 
 export const isFallbackActive = () => fallbackActive;
 export const setFallbackActive = (val) => {
@@ -228,3 +235,48 @@ export const memoryRecords = [
 
 export const memoryDocuments = [];
 export const memoryAuditLogs = [];
+
+// Persist in-memory records to /tmp for multi-container / serverless resilience
+export const saveMemoryState = () => {
+  try {
+    fs.writeFileSync(PATIENTS_FILE, JSON.stringify(memoryPatients), "utf8");
+    fs.writeFileSync(VISITS_FILE, JSON.stringify(memoryOPDVisits), "utf8");
+    fs.writeFileSync(RECORDS_FILE, JSON.stringify(memoryRecords), "utf8");
+  } catch (err) {
+    // Non-fatal if /tmp is read-only
+  }
+};
+
+export const loadMemoryState = () => {
+  try {
+    if (fs.existsSync(PATIENTS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(PATIENTS_FILE, "utf8"));
+      if (Array.isArray(data) && data.length > 0) {
+        const existingIds = new Set(memoryPatients.map((p) => p.patientId || p._id));
+        const newOnes = data.filter((p) => !existingIds.has(p.patientId) && !existingIds.has(p._id));
+        memoryPatients.unshift(...newOnes);
+      }
+    }
+    if (fs.existsSync(VISITS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(VISITS_FILE, "utf8"));
+      if (Array.isArray(data) && data.length > 0) {
+        const existingIds = new Set(memoryOPDVisits.map((v) => v._id));
+        const newOnes = data.filter((v) => !existingIds.has(v._id));
+        memoryOPDVisits.unshift(...newOnes);
+      }
+    }
+    if (fs.existsSync(RECORDS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(RECORDS_FILE, "utf8"));
+      if (Array.isArray(data) && data.length > 0) {
+        const existingIds = new Set(memoryRecords.map((r) => r._id));
+        const newOnes = data.filter((r) => !existingIds.has(r._id));
+        memoryRecords.unshift(...newOnes);
+      }
+    }
+  } catch (err) {
+    // Non-fatal if file parse fails
+  }
+};
+
+// Initialize from /tmp on cold start
+loadMemoryState();

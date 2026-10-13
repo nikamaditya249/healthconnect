@@ -1,5 +1,7 @@
 import express from "express";
+import mongoose from "mongoose";
 import Document from "../models/Document.js";
+import Patient from "../models/Patient.js";
 import { upload } from "../middleware/upload.js";
 import { optionalAuth } from "../middleware/auth.js";
 import AuditLog from "../models/AuditLog.js";
@@ -42,8 +44,14 @@ router.post("/upload", optionalAuth, upload.single("file"), async (req, res) => 
       return res.status(201).json(newDoc);
     }
 
+    let targetPatientId = patientId;
+    if (!mongoose.Types.ObjectId.isValid(patientId)) {
+      const patient = await Patient.findOne({ patientId: String(patientId).toUpperCase() });
+      if (patient) targetPatientId = patient._id;
+    }
+
     const newDoc = new Document({
-      patientId,
+      patientId: targetPatientId,
       uploadedBy: req.user?._id || null,
       uploadedByName: req.user?.name || "Healthcare Staff",
       title: title.trim(),
@@ -76,12 +84,24 @@ router.post("/upload", optionalAuth, upload.single("file"), async (req, res) => 
 // GET DOCUMENTS FOR A PATIENT
 router.get("/patient/:patientId", async (req, res) => {
   try {
+    const { patientId } = req.params;
+
     if (isFallbackActive()) {
-      const docs = memoryDocuments.filter((d) => d.patientId === req.params.patientId);
+      const docs = memoryDocuments.filter(
+        (d) =>
+          String(d.patientId) === String(patientId) ||
+          (d.patientId?.patientId && String(d.patientId.patientId).toUpperCase() === String(patientId).toUpperCase())
+      );
       return res.json(docs);
     }
 
-    const docs = await Document.find({ patientId: req.params.patientId }).sort({
+    let targetPatientId = patientId;
+    if (!mongoose.Types.ObjectId.isValid(patientId)) {
+      const patient = await Patient.findOne({ patientId: String(patientId).toUpperCase() });
+      if (patient) targetPatientId = patient._id;
+    }
+
+    const docs = await Document.find({ patientId: targetPatientId }).sort({
       createdAt: -1,
     });
     res.json(docs);

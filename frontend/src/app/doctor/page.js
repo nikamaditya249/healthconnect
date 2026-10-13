@@ -73,7 +73,10 @@ export default function DoctorDashboard() {
 
   // Start Consultation Handler
   const handleStartConsultation = async (visit) => {
-    const patientId = visit.patientId?._id;
+    const patientId =
+      visit.patientId?._id ||
+      visit.patientId?.patientId ||
+      (typeof visit.patientId === "string" ? visit.patientId : null);
     if (!patientId) return;
 
     setStartingId(visit._id);
@@ -221,7 +224,7 @@ export default function DoctorDashboard() {
           className={`tab-btn ${activeTab === "queue" || activeTab === "overview" ? "active" : ""}`}
         >
           <Clock size={16} />
-          <span>Today's OPD Queue ({waitingPatients.length + (activeConsultation ? 1 : 0)})</span>
+          <span>Today&apos;s OPD Queue ({waitingPatients.length + (activeConsultation ? 1 : 0)})</span>
         </button>
 
         <button
@@ -250,7 +253,7 @@ export default function DoctorDashboard() {
                 Waiting Patients in OPD
               </h3>
               <p style={{ fontSize: "13px", color: "#64748b", marginTop: "2px" }}>
-                Click "Start Consultation" to review medical history and prescribe treatment.
+                Click &quot;Start Consultation&quot; to review medical history and prescribe treatment.
               </p>
             </div>
           </div>

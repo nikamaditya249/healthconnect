@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { loginStaff, registerStaff, getStaffProfile } from "@/lib/api";
 
@@ -12,6 +12,15 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
   const pathname = usePathname();
+
+  const logout = useCallback(() => {
+    setUser(null);
+    setToken(null);
+    localStorage.removeItem("healthconnect_token");
+    localStorage.removeItem("healthconnect_user");
+    localStorage.removeItem("role");
+    router.push("/login");
+  }, [router]);
 
   useEffect(() => {
     const initializeAuth = async () => {
@@ -45,7 +54,7 @@ export function AuthProvider({ children }) {
     };
 
     initializeAuth();
-  }, []);
+  }, [logout]);
 
   const login = async (identifier, password) => {
     const data = await loginStaff({ identifier, password });
@@ -84,15 +93,6 @@ export function AuthProvider({ children }) {
       return data;
     }
     throw new Error(data.error || "Registration failed. Please check the entered details.");
-  };
-
-  const logout = () => {
-    setUser(null);
-    setToken(null);
-    localStorage.removeItem("healthconnect_token");
-    localStorage.removeItem("healthconnect_user");
-    localStorage.removeItem("role");
-    router.push("/login");
   };
 
   return (

@@ -14,7 +14,6 @@ const opdVisitSchema = new mongoose.Schema(
     },
     queueNumber: {
       type: Number,
-      default: 1,
     },
     status: {
       type: String,

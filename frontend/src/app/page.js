@@ -64,6 +64,7 @@ export default function LandingPage() {
           {/* Right Healthcare Visual */}
           <div style={styles.rightContent}>
             <div style={styles.imageCard}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src="/doctor2.png"
                 alt="Doctor reviewing digital healthcare records"
