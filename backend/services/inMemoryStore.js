@@ -252,24 +252,49 @@ export const loadMemoryState = () => {
     if (fs.existsSync(PATIENTS_FILE)) {
       const data = JSON.parse(fs.readFileSync(PATIENTS_FILE, "utf8"));
       if (Array.isArray(data) && data.length > 0) {
-        const existingIds = new Set(memoryPatients.map((p) => p.patientId || p._id));
-        const newOnes = data.filter((p) => !existingIds.has(p.patientId) && !existingIds.has(p._id));
+        const existingIds = new Set();
+        memoryPatients.forEach((p) => {
+          if (p.patientId) existingIds.add(String(p.patientId).toUpperCase());
+          if (p._id) existingIds.add(String(p._id));
+        });
+        const newOnes = [];
+        data.forEach((p) => {
+          const hasPId = p.patientId && existingIds.has(String(p.patientId).toUpperCase());
+          const hasId = p._id && existingIds.has(String(p._id));
+          if (!hasPId && !hasId) {
+            if (p.patientId) existingIds.add(String(p.patientId).toUpperCase());
+            if (p._id) existingIds.add(String(p._id));
+            newOnes.push(p);
+          }
+        });
         memoryPatients.unshift(...newOnes);
       }
     }
     if (fs.existsSync(VISITS_FILE)) {
       const data = JSON.parse(fs.readFileSync(VISITS_FILE, "utf8"));
       if (Array.isArray(data) && data.length > 0) {
-        const existingIds = new Set(memoryOPDVisits.map((v) => v._id));
-        const newOnes = data.filter((v) => !existingIds.has(v._id));
+        const existingVisitIds = new Set(memoryOPDVisits.map((v) => String(v._id)));
+        const newOnes = [];
+        data.forEach((v) => {
+          if (v._id && !existingVisitIds.has(String(v._id))) {
+            existingVisitIds.add(String(v._id));
+            newOnes.push(v);
+          }
+        });
         memoryOPDVisits.unshift(...newOnes);
       }
     }
     if (fs.existsSync(RECORDS_FILE)) {
       const data = JSON.parse(fs.readFileSync(RECORDS_FILE, "utf8"));
       if (Array.isArray(data) && data.length > 0) {
-        const existingIds = new Set(memoryRecords.map((r) => r._id));
-        const newOnes = data.filter((r) => !existingIds.has(r._id));
+        const existingRecordIds = new Set(memoryRecords.map((r) => String(r._id)));
+        const newOnes = [];
+        data.forEach((r) => {
+          if (r._id && !existingRecordIds.has(String(r._id))) {
+            existingRecordIds.add(String(r._id));
+            newOnes.push(r);
+          }
+        });
         memoryRecords.unshift(...newOnes);
       }
     }

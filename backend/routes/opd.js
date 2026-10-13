@@ -120,9 +120,18 @@ router.post(["/visit", "/add", "/", "/queue"], optionalAuth, async (req, res) =>
       // Auto-sync / restore patient if payload passed patientData (fixes serverless container drift)
       if (!p && (patientData || req.body.patient)) {
         const pd = patientData || req.body.patient;
+        let maxNum = 0;
+        memoryPatients.forEach((pt) => {
+          const m = String(pt.patientId || "").match(/^HC-(\d+)$/i);
+          if (m) {
+            const num = parseInt(m[1], 10);
+            if (num > maxNum) maxNum = num;
+          }
+        });
+        const genId = pd.patientId || `HC-${String(Math.max(maxNum + 1, memoryPatients.length + 1)).padStart(6, "0")}`;
         p = {
-          _id: pd._id || "60d0fe4f5311236168a109" + String(memoryPatients.length + 10).padStart(2, "0"),
-          patientId: pd.patientId || `HC-${String(memoryPatients.length + 1).padStart(6, "0")}`,
+          _id: pd._id && mongoose.Types.ObjectId.isValid(pd._id) ? String(pd._id) : new mongoose.Types.ObjectId().toString(),
+          patientId: genId,
           name: pd.name || "Unknown Patient",
           age: Number(pd.age) || 0,
           gender: pd.gender || "Male",
@@ -144,11 +153,17 @@ router.post(["/visit", "/add", "/", "/queue"], optionalAuth, async (req, res) =>
       if (!p) {
         const cleanName = (req.body.name || req.body.patientName || "Walk-in Patient").trim();
         const pIdStr = String(targetLookupId || "");
-        const genId = pIdStr.startsWith("HC-") ? pIdStr : `HC-${String(memoryPatients.length + 1).padStart(6, "0")}`;
+        let maxNum = 0;
+        memoryPatients.forEach((pt) => {
+          const m = String(pt.patientId || "").match(/^HC-(\d+)$/i);
+          if (m) {
+            const num = parseInt(m[1], 10);
+            if (num > maxNum) maxNum = num;
+          }
+        });
+        const genId = pIdStr.startsWith("HC-") ? pIdStr : `HC-${String(Math.max(maxNum + 1, memoryPatients.length + 1)).padStart(6, "0")}`;
         p = {
-          _id: pIdStr.startsWith("HC-")
-            ? "60d0fe4f5311236168a109" + String(memoryPatients.length + 10).padStart(2, "0")
-            : (pIdStr || ("60d0fe4f5311236168a109" + String(memoryPatients.length + 10).padStart(2, "0"))),
+          _id: new mongoose.Types.ObjectId().toString(),
           patientId: genId,
           name: cleanName,
           age: Number(req.body.age) || 20,
@@ -167,26 +182,54 @@ router.post(["/visit", "/add", "/", "/queue"], optionalAuth, async (req, res) =>
         saveMemoryState();
       }
 
-      // Duplicate queue check in fallback mode
+      // Robust duplicate queue check in fallback mode
+      const isSamePatient = (visit) => {
+        const vp = visit.patientId;
+        if (!vp) return false;
+
+        // Priority 1: Match by clinical patient ID (e.g., HC-000010) if present on both
+        if (vp.patientId && p.patientId) {
+          return String(vp.patientId).trim().toUpperCase() === String(p.patientId).trim().toUpperCase();
+        }
+
+        // Priority 2: Match by exact _id if both are valid
+        const vId = String(vp._id || vp);
+        const targetId = String(p._id || "");
+        if (vId && targetId && vId === targetId) {
+          return true;
+        }
+
+        // Priority 3: Match by phone if present on both
+        if (vp.phone && p.phone && String(vp.phone).trim() === String(p.phone).trim()) {
+          return true;
+        }
+
+        return false;
+      };
+
       const existingActive = memoryOPDVisits.find(
-        (v) =>
-          ((v.patientId?._id && v.patientId._id === p._id) ||
-            (v.patientId?.patientId && v.patientId.patientId === p.patientId) ||
-            v.patientId === p._id) &&
-          (v.status === "waiting" || v.status === "in-progress")
+        (v) => isSamePatient(v) && (v.status === "waiting" || v.status === "in-progress")
       );
 
       if (existingActive) {
-        return res.status(409).json({
-          error: `Patient already has an active visit in queue (Queue #${existingActive.queueNumber})`,
-          visit: existingActive,
+        return res.status(200).json({
+          ...existingActive,
+          alreadyQueued: true,
+          message: `Patient already has an active visit in queue (Queue #${existingActive.queueNumber})`,
         });
       }
 
+      let maxQueue = 0;
+      memoryOPDVisits.forEach((v) => {
+        if (typeof v.queueNumber === "number" && v.queueNumber > maxQueue) {
+          maxQueue = v.queueNumber;
+        }
+      });
+
       const newV = {
-        _id: "60d0fe4f5311236168a109" + (memoryOPDVisits.length + 30),
+        _id: new mongoose.Types.ObjectId().toString(),
         patientId: p,
-        queueNumber: memoryOPDVisits.length + 1,
+        queueNumber: maxQueue + 1,
         chiefComplaint: chiefComplaint || "General OPD Consultation",
         priority: priority || "normal",
         status: "waiting",
@@ -251,12 +294,16 @@ router.post(["/visit", "/add", "/", "/queue"], optionalAuth, async (req, res) =>
     const existingActive = await OPDVisit.findOne({
       patientId: patient._id,
       status: { $in: ["waiting", "in-progress"] },
-    });
+    })
+      .populate("patientId")
+      .populate("doctorId", "name employeeId");
 
     if (existingActive) {
-      return res.status(409).json({
-        error: `Patient already has an active visit in queue (Queue #${existingActive.queueNumber})`,
-        visit: existingActive,
+      const visitObj = existingActive.toObject ? existingActive.toObject() : existingActive;
+      return res.status(200).json({
+        ...visitObj,
+        alreadyQueued: true,
+        message: `Patient already has an active visit in queue (Queue #${existingActive.queueNumber})`,
       });
     }
 

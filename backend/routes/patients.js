@@ -181,9 +181,17 @@ router.post(["/", "/add"], optionalAuth, async (req, res) => {
         }
       }
 
-      const generatedId = `HC-${String(memoryPatients.length + 1).padStart(6, "0")}`;
+      let maxNum = 0;
+      memoryPatients.forEach((pt) => {
+        const m = String(pt.patientId || "").match(/^HC-(\d+)$/i);
+        if (m) {
+          const num = parseInt(m[1], 10);
+          if (num > maxNum) maxNum = num;
+        }
+      });
+      const generatedId = `HC-${String(Math.max(maxNum + 1, memoryPatients.length + 1)).padStart(6, "0")}`;
       const newP = {
-        _id: "60d0fe4f5311236168a109" + String(memoryPatients.length + 10).padStart(2, "0"),
+        _id: new mongoose.Types.ObjectId().toString(),
         patientId: generatedId,
         name: name.trim(),
         age: Number(age),
@@ -226,8 +234,20 @@ router.post(["/", "/add"], optionalAuth, async (req, res) => {
     }
 
     // Generate clean sequential ID
+    let maxDbNum = 0;
+    try {
+      const allPatientsWithHc = await Patient.find({ patientId: /^HC-\d+$/i }).select("patientId").lean();
+      allPatientsWithHc.forEach((p) => {
+        const m = String(p.patientId || "").match(/^HC-(\d+)$/i);
+        if (m) {
+          const num = parseInt(m[1], 10);
+          if (num > maxDbNum) maxDbNum = num;
+        }
+      });
+    } catch (e) {}
+
     const count = await Patient.countDocuments();
-    const generatedId = `HC-${String(count + 1).padStart(6, "0")}`;
+    const generatedId = `HC-${String(Math.max(maxDbNum + 1, count + 1)).padStart(6, "0")}`;
 
     const newPatient = new Patient({
       patientId: generatedId,

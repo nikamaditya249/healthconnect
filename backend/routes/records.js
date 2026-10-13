@@ -122,7 +122,7 @@ router.post("/", optionalAuth, async (req, res) => {
       }
       if (p) p.status = "done";
       const newRec = {
-        _id: "60d0fe4f5311236168a109" + (memoryRecords.length + 50),
+        _id: new mongoose.Types.ObjectId().toString(),
         patientId,
         visitId,
         doctorId: req.user?._id || memoryUsers[0]._id,

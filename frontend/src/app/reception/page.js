@@ -214,8 +214,19 @@ export default function ReceptionDashboard() {
       setSelectedPatientForVisit(newPatient);
       setShowVisitModal(true);
     } catch (err) {
-      const msg = err.response?.data?.error || err.message || "Failed to register patient";
-      addToast(msg, "error");
+      if (err.response?.status === 409 && err.response?.data?.patient) {
+        const existing = err.response.data.patient;
+        addToast(
+          `Patient already registered (${existing.patientId || existing._id}). Ready to generate token.`,
+          "info"
+        );
+        setShowRegisterModal(false);
+        setSelectedPatientForVisit(existing);
+        setShowVisitModal(true);
+      } else {
+        const msg = err.response?.data?.error || err.message || "Failed to register patient";
+        addToast(msg, "error");
+      }
     } finally {
       setRegistering(false);
     }
@@ -236,7 +247,15 @@ export default function ReceptionDashboard() {
       };
 
       const visit = await createOPDVisit(payload);
-      addToast(`OPD Token #${visit.queueNumber} created for ${selectedPatientForVisit.name}`, "success");
+      if (visit?.alreadyQueued) {
+        addToast(
+          visit.message || `Patient is already in today's OPD queue as Token #${visit.queueNumber}`,
+          "info"
+        );
+      } else {
+        addToast(`OPD Token #${visit.queueNumber} created for ${selectedPatientForVisit.name}`, "success");
+      }
+
       setShowVisitModal(false);
       setSelectedPatientForVisit(null);
       setVisitForm({ chiefComplaint: "General Consultation", priority: "normal" });
@@ -244,8 +263,18 @@ export default function ReceptionDashboard() {
       fetchDashboardData();
       fetchPatientsList();
     } catch (err) {
-      const msg = err.response?.data?.error || err.message || "Failed to create OPD visit";
-      addToast(msg, "error");
+      if (err.response?.status === 409) {
+        const msg = err.response?.data?.error || "Patient already has an active token in today's queue";
+        addToast(msg, "info");
+        setShowVisitModal(false);
+        setSelectedPatientForVisit(null);
+        setVisitForm({ chiefComplaint: "General Consultation", priority: "normal" });
+        fetchDashboardData();
+        fetchPatientsList();
+      } else {
+        const msg = err.response?.data?.error || err.message || "Failed to create OPD visit";
+        addToast(msg, "error");
+      }
     } finally {
       setCreatingVisit(false);
     }

@@ -27,7 +27,7 @@ router.post("/upload", optionalAuth, upload.single("file"), async (req, res) => 
 
     if (isFallbackActive()) {
       const newDoc = {
-        _id: "60d0fe4f5311236168a109" + (memoryDocuments.length + 70),
+        _id: new mongoose.Types.ObjectId().toString(),
         patientId,
         uploadedBy: req.user?._id || null,
         uploadedByName: req.user?.name || "Healthcare Staff",
