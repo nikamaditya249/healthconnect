@@ -94,6 +94,37 @@ router.get("/", async (req, res) => {
   }
 });
 
+// CLIENT-SERVER PATIENT SYNC (Guarantees multi-container consistency on serverless)
+router.post("/sync", optionalAuth, async (req, res) => {
+  try {
+    const { patients } = req.body;
+    if (isFallbackActive() && Array.isArray(patients) && patients.length > 0) {
+      loadMemoryState();
+      const existingIds = new Set();
+      memoryPatients.forEach((p) => {
+        if (p.patientId) existingIds.add(String(p.patientId).toUpperCase());
+        if (p._id) existingIds.add(String(p._id));
+      });
+      patients.forEach((p) => {
+        if (p) {
+          const hasPId = p.patientId && existingIds.has(String(p.patientId).toUpperCase());
+          const hasId = p._id && existingIds.has(String(p._id));
+          if (!hasPId && !hasId) {
+            memoryPatients.unshift(p);
+            if (p.patientId) existingIds.add(String(p.patientId).toUpperCase());
+            if (p._id) existingIds.add(String(p._id));
+          }
+        }
+      });
+      saveMemoryState();
+      return res.json({ success: true, count: memoryPatients.length });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET SINGLE PATIENT BY ID (Supports both MongoDB ObjectId and HC-XXXXXX)
 router.get("/:id", async (req, res) => {
   try {

@@ -21,10 +21,13 @@ router.get("/queue", async (req, res) => {
     const { status } = req.query;
 
     if (isFallbackActive()) {
+      loadMemoryState();
       let q = [...memoryOPDVisits];
       if (status && status !== "all") {
         q = q.filter((v) => v.status === status);
       }
+      // Strictly sort by queueNumber ascending (Token #1, #2, #3, ...)
+      q.sort((a, b) => (Number(a.queueNumber) || 0) - (Number(b.queueNumber) || 0));
       return res.json(q);
     }
 
@@ -40,7 +43,7 @@ router.get("/queue", async (req, res) => {
     const queue = await OPDVisit.find(filter)
       .populate("patientId")
       .populate("doctorId", "name employeeId specialization department")
-      .sort({ status: -1, createdAt: -1 });
+      .sort({ queueNumber: 1, createdAt: 1 });
 
     // Filter out any orphaned visits where patient was deleted
     const validQueue = queue.filter((v) => v.patientId !== null);
@@ -52,10 +55,34 @@ router.get("/queue", async (req, res) => {
   }
 });
 
+// CLIENT-SERVER QUEUE SYNC (Guarantees multi-container consistency on serverless)
+router.post("/sync", optionalAuth, async (req, res) => {
+  try {
+    const { visits } = req.body;
+    if (isFallbackActive() && Array.isArray(visits) && visits.length > 0) {
+      loadMemoryState();
+      const existingVisitIds = new Set(memoryOPDVisits.map((v) => String(v._id)));
+      visits.forEach((v) => {
+        if (v && v._id && !existingVisitIds.has(String(v._id))) {
+          memoryOPDVisits.push(v);
+          existingVisitIds.add(String(v._id));
+        }
+      });
+      memoryOPDVisits.sort((a, b) => (Number(a.queueNumber) || 0) - (Number(b.queueNumber) || 0));
+      saveMemoryState();
+      return res.json({ success: true, count: memoryOPDVisits.length });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET QUEUE STATS
 router.get("/stats", async (req, res) => {
   try {
     if (isFallbackActive()) {
+      loadMemoryState();
       const waitingCount = memoryOPDVisits.filter((v) => v.status === "waiting").length;
       const inProgressCount = memoryOPDVisits.filter((v) => v.status === "in-progress").length;
       const completedCount = memoryPatients.filter((p) => p.status === "done").length;

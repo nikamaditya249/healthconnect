@@ -57,8 +57,41 @@ export default function DoctorDashboard() {
         getPatients({ search: searchQuery, limit: 50 }),
       ]);
       setStats(statsData);
-      setQueue(queueData);
-      setPatients(patientsData.patients || []);
+
+      let mergedQueue = Array.isArray(queueData) ? [...queueData] : [];
+      try {
+        const storedVisits = JSON.parse(localStorage.getItem("healthconnect_opd_visits") || "[]");
+        const existingVisitIds = new Set();
+        mergedQueue.forEach((v) => {
+          if (v._id) existingVisitIds.add(String(v._id));
+          if (v.queueNumber) existingVisitIds.add(`token_${v.queueNumber}`);
+        });
+
+        const missing = storedVisits.filter(
+          (v) => !existingVisitIds.has(String(v._id)) && !existingVisitIds.has(`token_${v.queueNumber}`)
+        );
+
+        if (missing.length > 0) {
+          mergedQueue.push(...missing);
+        }
+      } catch (e) {}
+
+      // Strictly sort by token queueNumber ascending (Token #1, #2, #3, ...)
+      mergedQueue.sort((a, b) => (Number(a.queueNumber) || 0) - (Number(b.queueNumber) || 0));
+      setQueue(mergedQueue);
+
+      let pList = patientsData.patients || [];
+      try {
+        const storedPatients = JSON.parse(localStorage.getItem("healthconnect_custom_patients") || "[]");
+        const existingIds = new Set(pList.map((p) => p.patientId || p._id));
+        const missingPatients = storedPatients.filter(
+          (p) => !existingIds.has(p.patientId) && !existingIds.has(p._id)
+        );
+        if (missingPatients.length > 0) {
+          pList = [...missingPatients, ...pList];
+        }
+      } catch (e) {}
+      setPatients(pList);
     } catch (err) {
       console.error("Error fetching doctor data:", err);
     } finally {
@@ -83,7 +116,14 @@ export default function DoctorDashboard() {
     try {
       if (visit.status === "waiting") {
         await updateOPDStatus(visit._id, "in-progress");
-        addToast(`Consultation started for ${visit.patientId.name}`, "info");
+        try {
+          const stored = JSON.parse(localStorage.getItem("healthconnect_opd_visits") || "[]");
+          const updated = stored.map((v) =>
+            v._id === visit._id ? { ...v, status: "in-progress" } : v
+          );
+          localStorage.setItem("healthconnect_opd_visits", JSON.stringify(updated));
+        } catch (e) {}
+        addToast(`Consultation started for ${visit.patientId?.name || "Patient"}`, "info");
       }
       router.push(`/patient/${patientId}`);
     } catch (err) {

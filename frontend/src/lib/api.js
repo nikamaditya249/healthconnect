@@ -104,6 +104,22 @@ export const updateOPDStatus = async (visitId, status) => {
   return safeRequest(() => apiClient.put(`/opd/visit/${visitId}/status`, { status }), "Failed to update visit status");
 };
 
+export const syncOPDQueue = async (visits) => {
+  try {
+    return await apiClient.post("/opd/sync", { visits });
+  } catch {
+    // Non-fatal sync
+  }
+};
+
+export const syncPatients = async (patients) => {
+  try {
+    return await apiClient.post("/patients/sync", { patients });
+  } catch {
+    // Non-fatal sync
+  }
+};
+
 // ==================== MEDICAL RECORDS APIS ====================
 export const getPatientRecords = async (patientId) => {
   return safeRequest(() => apiClient.get(`/records/patient/${patientId}`), "Failed to fetch medical records");
