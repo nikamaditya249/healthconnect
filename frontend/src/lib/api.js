@@ -133,6 +133,14 @@ export const createMedicalRecord = async (recordData) => {
   return safeRequest(() => apiClient.post("/records", recordData), "Failed to save medical record");
 };
 
+export const syncMedicalRecords = async (records) => {
+  try {
+    return await apiClient.post("/records/sync", { records });
+  } catch {
+    // Non-fatal sync
+  }
+};
+
 // ==================== MEDICAL DOCUMENTS APIS ====================
 export const uploadMedicalDocument = async (formData) => {
   return safeRequest(

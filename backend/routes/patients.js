@@ -7,6 +7,7 @@ import { optionalAuth } from "../middleware/auth.js";
 import {
   isFallbackActive,
   memoryPatients,
+  memoryOPDVisits,
   saveMemoryState,
   loadMemoryState,
 } from "../services/inMemoryStore.js";
@@ -98,7 +99,7 @@ router.get("/", async (req, res) => {
 router.post("/sync", optionalAuth, async (req, res) => {
   try {
     const { patients } = req.body;
-    if (isFallbackActive() && Array.isArray(patients) && patients.length > 0) {
+    if (Array.isArray(patients) && patients.length > 0) {
       loadMemoryState();
       const existingIds = new Set();
       memoryPatients.forEach((p) => {
@@ -117,6 +118,41 @@ router.post("/sync", optionalAuth, async (req, res) => {
         }
       });
       saveMemoryState();
+
+      // If MongoDB is connected, also upsert missing patients into MongoDB preserving _id
+      if (!isFallbackActive()) {
+        for (const p of patients) {
+          if (!p) continue;
+          try {
+            const orList = [];
+            if (p._id && mongoose.Types.ObjectId.isValid(p._id)) orList.push({ _id: p._id });
+            if (p.patientId) orList.push({ patientId: String(p.patientId).toUpperCase() });
+            if (orList.length > 0) {
+              const existing = await Patient.findOne({ $or: orList });
+              if (!existing) {
+                const newDoc = new Patient({
+                  _id: p._id && mongoose.Types.ObjectId.isValid(p._id) ? new mongoose.Types.ObjectId(p._id) : undefined,
+                  patientId: p.patientId,
+                  name: p.name || "Patient",
+                  age: Number(p.age) || 0,
+                  gender: p.gender || "Male",
+                  bloodGroup: p.bloodGroup || "Unknown",
+                  phone: p.phone || "",
+                  address: p.address || "",
+                  allergies: p.allergies || [],
+                  chronicConditions: p.chronicConditions || [],
+                  status: p.status || "waiting",
+                  lastVisit: p.lastVisit || new Date(),
+                });
+                await newDoc.save();
+              }
+            }
+          } catch (e) {
+            console.warn("Sync patient to Mongo warning:", e.message);
+          }
+        }
+      }
+
       return res.json({ success: true, count: memoryPatients.length });
     }
     res.json({ success: true });
@@ -144,6 +180,19 @@ router.get("/:id", async (req, res) => {
             (p.patientId && String(p.patientId).toUpperCase() === String(id).toUpperCase())
         );
       }
+      if (!patient) {
+        const visit = memoryOPDVisits.find(
+          (v) =>
+            (v.patientId?._id && String(v.patientId._id) === String(id)) ||
+            (v.patientId?.patientId && String(v.patientId.patientId).toUpperCase() === String(id).toUpperCase()) ||
+            (v.patientId && String(v.patientId) === String(id))
+        );
+        if (visit && visit.patientId && typeof visit.patientId === "object") {
+          patient = visit.patientId;
+          memoryPatients.unshift(patient);
+          saveMemoryState();
+        }
+      }
       if (!patient) return res.status(404).json({ error: "Patient not found" });
       return res.json(patient);
     }
@@ -155,6 +204,51 @@ router.get("/:id", async (req, res) => {
     }
     if (!patient) {
       patient = await Patient.findOne({ patientId: String(id).toUpperCase() });
+    }
+
+    // Secondary fallback: Check memory store if not yet committed to MongoDB
+    if (!patient) {
+      loadMemoryState();
+      patient = memoryPatients.find(
+        (p) =>
+          (p._id && String(p._id) === String(id)) ||
+          (p.patientId && String(p.patientId).toUpperCase() === String(id).toUpperCase())
+      );
+      if (!patient) {
+        const visit = memoryOPDVisits.find(
+          (v) =>
+            (v.patientId?._id && String(v.patientId._id) === String(id)) ||
+            (v.patientId?.patientId && String(v.patientId.patientId).toUpperCase() === String(id).toUpperCase()) ||
+            (v.patientId && String(v.patientId) === String(id))
+        );
+        if (visit && visit.patientId && typeof visit.patientId === "object") {
+          patient = visit.patientId;
+        }
+      }
+
+      // If found in memory store, persist to MongoDB so future queries hit DB directly
+      if (patient) {
+        try {
+          const doc = new Patient({
+            _id: patient._id && mongoose.Types.ObjectId.isValid(patient._id) ? new mongoose.Types.ObjectId(patient._id) : undefined,
+            patientId: patient.patientId,
+            name: patient.name,
+            age: patient.age,
+            gender: patient.gender,
+            bloodGroup: patient.bloodGroup,
+            phone: patient.phone,
+            address: patient.address,
+            allergies: patient.allergies,
+            chronicConditions: patient.chronicConditions,
+            status: patient.status || "waiting",
+            lastVisit: patient.lastVisit || new Date(),
+          });
+          await doc.save();
+          return res.json(doc);
+        } catch (e) {
+          return res.json(patient);
+        }
+      }
     }
 
     if (!patient) {

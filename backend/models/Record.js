@@ -30,6 +30,16 @@ const recordSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    patientCode: {
+      type: String,
+      index: true,
+      default: "",
+    },
+    patientObjectId: {
+      type: String,
+      index: true,
+      default: "",
+    },
     visitId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "OPDVisit",

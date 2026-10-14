@@ -41,6 +41,8 @@ import {
   searchPatientRecordsAI,
   extractDocumentInsightsAI,
   createOPDVisit,
+  syncPatients,
+  syncMedicalRecords,
 } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/components/Toast";
@@ -117,12 +119,61 @@ export default function PatientProfilePage() {
         if (!pData) throw pErr;
       }
 
+      if (pData) {
+        // Automatically sync patient to server so serverless containers never 404
+        syncPatients([pData]).catch(() => {});
+      }
+
       const [recordsData, docsData] = await Promise.all([
         getPatientRecords(id).catch(() => []),
         getPatientDocuments(id).catch(() => []),
       ]);
+
+      // Merge server records with locally stored records to guarantee 100% persistence on serverless
+      let mergedRecords = Array.isArray(recordsData) ? [...recordsData] : [];
+      try {
+        const storedRecs = JSON.parse(localStorage.getItem("healthconnect_patient_records") || "[]");
+        const targetId = String(pData?._id || id).toUpperCase();
+        const targetCode = String(pData?.patientId || (String(id).startsWith("HC-") ? id : "")).toUpperCase();
+
+        const patientStoredRecs = storedRecs.filter((r) => {
+          const rPid = String(r.patientId?._id || r.patientId?.patientId || r.patientId || "").toUpperCase();
+          const rCode = String(r.patientCode || "").toUpperCase();
+          const rObj = String(r.patientObjectId || "").toUpperCase();
+          return (
+            (targetId && (rPid === targetId || rObj === targetId)) ||
+            (targetCode && (rPid === targetCode || rCode === targetCode))
+          );
+        });
+
+        const existingRecIds = new Set(mergedRecords.map((r) => String(r._id)));
+        const missingRecs = patientStoredRecs.filter((r) => !existingRecIds.has(String(r._id)));
+        if (missingRecs.length > 0) {
+          mergedRecords.push(...missingRecs);
+          syncMedicalRecords(mergedRecords).catch(() => {});
+        }
+
+        // Keep local cache updated
+        const otherPatientsRecs = storedRecs.filter((r) => {
+          const rPid = String(r.patientId?._id || r.patientId?.patientId || r.patientId || "").toUpperCase();
+          const rCode = String(r.patientCode || "").toUpperCase();
+          const rObj = String(r.patientObjectId || "").toUpperCase();
+          const matches =
+            (targetId && (rPid === targetId || rObj === targetId)) ||
+            (targetCode && (rPid === targetCode || rCode === targetCode));
+          return !matches;
+        });
+        localStorage.setItem(
+          "healthconnect_patient_records",
+          JSON.stringify([...mergedRecords, ...otherPatientsRecs])
+        );
+      } catch (e) {}
+
+      // Sort chronological descending (latest consultation first)
+      mergedRecords.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
       setPatient(pData);
-      setRecords(recordsData || []);
+      setRecords(mergedRecords);
       setDocuments(docsData || []);
     } catch (err) {
       console.error("Error fetching patient details:", err);
@@ -231,7 +282,10 @@ export default function PatientProfilePage() {
     setSavingConsult(true);
     try {
       const payload = {
-        patientId: patient._id,
+        patientId: patient?._id || patient?.patientId || id,
+        patientCode: patient?.patientId || (String(id).startsWith("HC-") ? id : undefined),
+        patientObjectId: patient?._id || (id.length === 24 ? id : undefined),
+        patientData: patient,
         doctorName: user?.name || "Dr. Alok Sharma",
         doctorId: user?._id || null,
         chiefComplaint: consultForm.chiefComplaint,
@@ -250,7 +304,31 @@ export default function PatientProfilePage() {
         followUpDate: consultForm.followUpDate,
       };
 
-      await createMedicalRecord(payload);
+      const newRec = await createMedicalRecord(payload);
+
+      // Save into localStorage immediately so it is NEVER lost on subsequent refreshes
+      if (newRec) {
+        if (!newRec.patientCode && patient?.patientId) newRec.patientCode = patient.patientId;
+        if (!newRec.patientObjectId && patient?._id) newRec.patientObjectId = patient._id;
+
+        try {
+          const stored = JSON.parse(localStorage.getItem("healthconnect_patient_records") || "[]");
+          const exists = stored.some((r) => r._id === newRec._id);
+          if (!exists) {
+            stored.unshift(newRec);
+            localStorage.setItem("healthconnect_patient_records", JSON.stringify(stored));
+          }
+        } catch (e) {}
+
+        // Instantly reflect in local timeline state
+        setRecords((prev) => {
+          const filtered = prev.filter((r) => r._id !== newRec._id);
+          const updated = [newRec, ...filtered];
+          updated.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+          return updated;
+        });
+      }
+
       addToast("Consultation saved and added to medical timeline!", "success");
       setShowConsultModal(false);
 
