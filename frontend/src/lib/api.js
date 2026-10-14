@@ -100,8 +100,15 @@ export const createOPDVisit = async (visitData) => {
   }
 };
 
-export const updateOPDStatus = async (visitId, status) => {
-  return safeRequest(() => apiClient.put(`/opd/visit/${visitId}/status`, { status }), "Failed to update visit status");
+export const updateOPDStatus = async (visitId, status, extra = {}) => {
+  const payload = {
+    status,
+    visitId,
+    queueNumber: extra.queueNumber,
+    patientId: extra.patientId,
+    patientCode: extra.patientCode,
+  };
+  return safeRequest(() => apiClient.put(`/opd/visit/${visitId}/status`, payload), "Failed to update visit status");
 };
 
 export const syncOPDQueue = async (visits) => {

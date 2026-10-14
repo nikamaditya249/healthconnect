@@ -210,6 +210,16 @@ a {
   background-color: var(--status-urgent-bg);
   color: #b91c1c;
   border: 1px solid #fecaca;
+  font-weight: 600;
+}
+
+.badge-emergency {
+  background-color: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #f87171;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.35);
 }
 
 .badge-pill {

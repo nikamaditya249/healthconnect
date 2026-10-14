@@ -15,6 +15,39 @@ import {
 
 const router = express.Router();
 
+// Priority tier: Emergency = 0 (highest), Urgent = 1, Normal = 2
+const priorityTier = (p) => {
+  const s = String(p || "").toLowerCase();
+  if (s === "emergency") return 0;
+  if (s === "urgent" || s === "priority") return 1;
+  return 2;
+};
+
+// Clinically sort OPD Queue: in-progress first, then emergency, then urgent, then normal (FIFO by token within each tier)
+export const sortQueueClinically = (visits) => {
+  return [...visits].sort((a, b) => {
+    // 1. In-progress visits always at the very top (currently in doctor's cabin)
+    if (a.status === "in-progress" && b.status !== "in-progress") return -1;
+    if (b.status === "in-progress" && a.status !== "in-progress") return 1;
+
+    // 2. Completed visits at the bottom if present
+    const aDone = a.status === "completed" || a.status === "done";
+    const bDone = b.status === "completed" || b.status === "done";
+    if (aDone && !bDone) return 1;
+    if (!aDone && bDone) return -1;
+
+    // 3. Emergency & Urgent triage for waiting patients
+    const tierA = priorityTier(a.priority);
+    const tierB = priorityTier(b.priority);
+    if (tierA !== tierB) {
+      return tierA - tierB;
+    }
+
+    // 4. Within same priority tier: Token / Queue number ascending (FIFO)
+    return (Number(a.queueNumber) || 0) - (Number(b.queueNumber) || 0);
+  });
+};
+
 // GET TODAY'S OPD QUEUE
 router.get("/queue", async (req, res) => {
   try {
@@ -26,9 +59,7 @@ router.get("/queue", async (req, res) => {
       if (status && status !== "all") {
         q = q.filter((v) => v.status === status);
       }
-      // Strictly sort by queueNumber ascending (Token #1, #2, #3, ...)
-      q.sort((a, b) => (Number(a.queueNumber) || 0) - (Number(b.queueNumber) || 0));
-      return res.json(q);
+      return res.json(sortQueueClinically(q));
     }
 
     const filter = {};
@@ -42,13 +73,12 @@ router.get("/queue", async (req, res) => {
 
     const queue = await OPDVisit.find(filter)
       .populate("patientId")
-      .populate("doctorId", "name employeeId specialization department")
-      .sort({ queueNumber: 1, createdAt: 1 });
+      .populate("doctorId", "name employeeId specialization department");
 
     // Filter out any orphaned visits where patient was deleted
     const validQueue = queue.filter((v) => v.patientId !== null);
 
-    res.json(validQueue);
+    res.json(sortQueueClinically(validQueue));
   } catch (err) {
     console.error("Error fetching OPD queue:", err);
     res.status(500).json({ error: "Failed to fetch OPD queue", details: err.message });
@@ -59,17 +89,42 @@ router.get("/queue", async (req, res) => {
 router.post("/sync", optionalAuth, async (req, res) => {
   try {
     const { visits } = req.body;
-    if (isFallbackActive() && Array.isArray(visits) && visits.length > 0) {
+    if (Array.isArray(visits) && visits.length > 0) {
       loadMemoryState();
-      const existingVisitIds = new Set(memoryOPDVisits.map((v) => String(v._id)));
       visits.forEach((v) => {
-        if (v && v._id && !existingVisitIds.has(String(v._id))) {
+        if (!v) return;
+        const idx = memoryOPDVisits.findIndex(
+          (item) =>
+            (v._id && String(item._id) === String(v._id)) ||
+            (v.queueNumber && Number(item.queueNumber) === Number(v.queueNumber))
+        );
+        if (idx !== -1) {
+          memoryOPDVisits[idx] = { ...memoryOPDVisits[idx], ...v };
+        } else {
           memoryOPDVisits.push(v);
-          existingVisitIds.add(String(v._id));
         }
       });
-      memoryOPDVisits.sort((a, b) => (Number(a.queueNumber) || 0) - (Number(b.queueNumber) || 0));
       saveMemoryState();
+
+      // If MongoDB is connected, also update any completed/in-progress statuses in MongoDB
+      if (mongoose.connection.readyState >= 1) {
+        for (const v of visits) {
+          if (!v) continue;
+          const updateFields = { status: v.status };
+          if (v.status === "completed" || v.status === "done") {
+            updateFields.completedAt = v.completedAt || new Date();
+          } else if (v.status === "in-progress") {
+            updateFields.startedAt = v.startedAt || new Date();
+          }
+          if (v.queueNumber) {
+            await OPDVisit.findOneAndUpdate({ queueNumber: v.queueNumber }, updateFields).catch(() => {});
+          }
+          if (v._id && mongoose.Types.ObjectId.isValid(v._id)) {
+            await OPDVisit.findByIdAndUpdate(v._id, updateFields).catch(() => {});
+          }
+        }
+      }
+
       return res.json({ success: true, count: memoryOPDVisits.length });
     }
     res.json({ success: true });
@@ -85,9 +140,11 @@ router.get("/stats", async (req, res) => {
       loadMemoryState();
       const waitingCount = memoryOPDVisits.filter((v) => v.status === "waiting").length;
       const inProgressCount = memoryOPDVisits.filter((v) => v.status === "in-progress").length;
-      const completedCount = memoryPatients.filter((p) => p.status === "done").length;
+      const completedVisits = memoryOPDVisits.filter((v) => v.status === "completed" || v.status === "done").length;
+      const completedPatients = memoryPatients.filter((p) => p.status === "done").length;
+      const completedCount = Math.max(completedVisits, completedPatients);
       return res.json({
-        today: memoryOPDVisits.length + completedCount,
+        today: memoryOPDVisits.length,
         waiting: waitingCount,
         inProgress: inProgressCount,
         completed: completedCount,
@@ -108,7 +165,7 @@ router.get("/stats", async (req, res) => {
       ]);
 
     res.json({
-      today: totalToday,
+      today: totalToday || (waitingCount + inProgressCount + completedCount),
       waiting: waitingCount,
       inProgress: inProgressCount,
       completed: completedCount,
@@ -436,19 +493,39 @@ const handleUpdateVisitStatus = async (req, res) => {
         .populate("doctorId", "name");
     }
 
-    // If not found by direct visit ObjectId, attempt lookup by patient
+    // If not found by direct visit ObjectId, attempt lookup by queueNumber
+    const queueNum = req.body.queueNumber || (!isNaN(Number(id)) && Number(id) > 0 && Number(id) < 10000 ? Number(id) : null);
+    if (!updated && queueNum) {
+      updated = await OPDVisit.findOneAndUpdate(
+        { queueNumber: queueNum },
+        updateFields,
+        { new: true, sort: { createdAt: -1 } }
+      )
+        .populate("patientId")
+        .populate("doctorId", "name");
+    }
+
+    // If not found, attempt lookup by patient code or ID
     if (!updated) {
-      let patientObjId = null;
-      if (mongoose.Types.ObjectId.isValid(id)) {
-        patientObjId = id;
-      } else {
-        const p = await Patient.findOne({ patientId: new RegExp(`^${id}$`, "i") });
-        if (p) patientObjId = p._id;
+      const pCandidate = req.body.patientCode || req.body.patientId || id;
+      let patientObj = null;
+      if (pCandidate) {
+        if (mongoose.Types.ObjectId.isValid(pCandidate)) {
+          patientObj = await Patient.findById(pCandidate);
+        }
+        if (!patientObj) {
+          patientObj = await Patient.findOne({
+            $or: [
+              { patientId: new RegExp(`^${pCandidate}$`, "i") },
+              { name: new RegExp(`^${pCandidate}$`, "i") },
+            ],
+          });
+        }
       }
 
-      if (patientObjId) {
+      if (patientObj) {
         updated = await OPDVisit.findOneAndUpdate(
-          { patientId: patientObjId, status: { $in: ["waiting", "in-progress"] } },
+          { patientId: patientObj._id, status: { $in: ["waiting", "in-progress"] } },
           updateFields,
           { new: true, sort: { createdAt: -1 } }
         )
@@ -457,7 +534,40 @@ const handleUpdateVisitStatus = async (req, res) => {
       }
     }
 
+    // Always synchronize in-memory store as well
+    try {
+      loadMemoryState();
+      const matchMem = (item) =>
+        String(item._id) === String(id) ||
+        (queueNum && Number(item.queueNumber) === Number(queueNum)) ||
+        String(item.patientId?._id || item.patientId) === String(id) ||
+        String(item.patientId?.patientId || "").toUpperCase() === String(req.body.patientCode || id).toUpperCase();
+      let memV = memoryOPDVisits.find(matchMem);
+      if (memV) {
+        memV.status = nextStatus;
+        if (nextStatus === "done" || nextStatus === "completed") {
+          memV.completedAt = new Date().toISOString();
+        } else if (nextStatus === "in-progress") {
+          memV.startedAt = new Date().toISOString();
+        }
+        if (memV.patientId && typeof memV.patientId === "object") {
+          memV.patientId.status = (nextStatus === "completed" || nextStatus === "done") ? "done" : nextStatus;
+        }
+        saveMemoryState();
+      }
+    } catch (e) {}
+
     if (!updated) {
+      const memV = memoryOPDVisits.find(
+        (item) =>
+          String(item._id) === String(id) ||
+          (queueNum && Number(item.queueNumber) === Number(queueNum)) ||
+          String(item.patientId?._id || item.patientId) === String(id) ||
+          String(item.patientId?.patientId || "").toUpperCase() === String(req.body.patientCode || id).toUpperCase()
+      );
+      if (memV) {
+        return res.json(memV);
+      }
       return res.status(404).json({ error: "OPD Visit not found" });
     }
 

@@ -42,6 +42,8 @@ import {
   extractDocumentInsightsAI,
   createOPDVisit,
   updateOPDStatus,
+  getOPDQueue,
+  syncOPDQueue,
   syncPatients,
   syncMedicalRecords,
   syncMedicalDocuments,
@@ -209,7 +211,13 @@ export default function PatientProfilePage() {
 
       // Check for active or waiting OPD visit for this patient
       try {
-        const storedVisits = JSON.parse(localStorage.getItem("healthconnect_opd_visits") || "[]");
+        let storedVisits = JSON.parse(localStorage.getItem("healthconnect_opd_visits") || "[]");
+        if (!storedVisits || storedVisits.length === 0) {
+          const qRes = await getOPDQueue().catch(() => null);
+          if (qRes && Array.isArray(qRes)) {
+            storedVisits = qRes;
+          }
+        }
         const targetId = String(pData?._id || id).toUpperCase();
         const targetCode = String(pData?.patientId || (String(id).startsWith("HC-") ? id : "")).toUpperCase();
 
@@ -264,10 +272,14 @@ export default function PatientProfilePage() {
     }
 
     try {
-      // 1. Update backend
+      // 1. Update backend with full metadata for accurate resolution
       const targetVisitId = visitToComplete?._id || pId;
       if (targetVisitId) {
-        await updateOPDStatus(targetVisitId, "completed").catch(() => {});
+        await updateOPDStatus(targetVisitId, "completed", {
+          queueNumber: visitToComplete?.queueNumber,
+          patientId: pId,
+          patientCode: pCode,
+        }).catch(() => {});
       }
 
       // 2. Update localStorage healthconnect_opd_visits
@@ -283,6 +295,8 @@ export default function PatientProfilePage() {
           return matches ? { ...v, status: "completed", completedAt: new Date().toISOString() } : v;
         });
         localStorage.setItem("healthconnect_opd_visits", JSON.stringify(updated));
+        // Push full state to backend so reload / other pages immediately reflect completed state
+        syncOPDQueue(updated).catch(() => {});
       } catch (e) {}
 
       // 3. Update localStorage healthconnect_custom_patients
@@ -455,7 +469,7 @@ export default function PatientProfilePage() {
         const pCode = patient?.patientId || (String(id).startsWith("HC-") ? id : "");
 
         const storedVisits = JSON.parse(localStorage.getItem("healthconnect_opd_visits") || "[]");
-        let foundVisitId = null;
+        let foundVisit = null;
         const updatedVisits = storedVisits.map((v) => {
           const vPid = String(v.patientId?._id || v.patientId?.patientId || v.patientId || "").toUpperCase();
           const vCode = String(v.patientId?.patientId || "").toUpperCase();
@@ -463,18 +477,24 @@ export default function PatientProfilePage() {
             (pId && vPid === String(pId).toUpperCase()) ||
             (pCode && (vPid === String(pCode).toUpperCase() || vCode === String(pCode).toUpperCase()));
           if (matches && v.status !== "completed" && v.status !== "done") {
-            foundVisitId = v._id;
+            foundVisit = v;
             return { ...v, status: "completed", completedAt: new Date().toISOString() };
           }
           return v;
         });
         localStorage.setItem("healthconnect_opd_visits", JSON.stringify(updatedVisits));
 
-        // Sync visit completion to backend
-        const targetVisitId = foundVisitId || activeVisit?._id || pId;
+        // Sync visit completion to backend with full metadata
+        const targetVisitId = foundVisit?._id || activeVisit?._id || pId;
         if (targetVisitId) {
-          updateOPDStatus(targetVisitId, "completed").catch(() => {});
+          updateOPDStatus(targetVisitId, "completed", {
+            queueNumber: foundVisit?.queueNumber || activeVisit?.queueNumber,
+            patientId: pId,
+            patientCode: pCode,
+          }).catch(() => {});
         }
+        // Push full state to backend
+        syncOPDQueue(updatedVisits).catch(() => {});
 
         // Update patient status in local custom patients
         const storedP = JSON.parse(localStorage.getItem("healthconnect_custom_patients") || "[]");

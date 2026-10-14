@@ -21,10 +21,44 @@ import {
   getOPDQueue,
   getOPDStats,
   updateOPDStatus,
+  syncOPDQueue,
   getPatients,
 } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import Loader, { SkeletonRow } from "@/components/Loader";
+
+// Priority tier: Emergency = 0 (highest), Urgent = 1, Normal = 2
+const priorityTier = (p) => {
+  const s = String(p || "").toLowerCase();
+  if (s === "emergency") return 0;
+  if (s === "urgent" || s === "priority") return 1;
+  return 2;
+};
+
+// Clinically sort OPD Queue: In-progress at top, then emergency, then urgent, then normal (FIFO by token within each tier)
+export const sortQueueClinically = (visits) => {
+  return [...visits].sort((a, b) => {
+    // 1. In-progress visits always at the very top (currently being attended)
+    if (a.status === "in-progress" && b.status !== "in-progress") return -1;
+    if (b.status === "in-progress" && a.status !== "in-progress") return 1;
+
+    // 2. Completed visits at the bottom if present
+    const aDone = a.status === "completed" || a.status === "done";
+    const bDone = b.status === "completed" || b.status === "done";
+    if (aDone && !bDone) return 1;
+    if (!aDone && bDone) return -1;
+
+    // 3. Emergency & Urgent triage for waiting patients
+    const tierA = priorityTier(a.priority);
+    const tierB = priorityTier(b.priority);
+    if (tierA !== tierB) {
+      return tierA - tierB;
+    }
+
+    // 4. Within same priority tier: Token / Queue number ascending (FIFO)
+    return (Number(a.queueNumber) || 0) - (Number(b.queueNumber) || 0);
+  });
+};
 
 export default function DoctorDashboard() {
   const router = useRouter();
@@ -52,33 +86,64 @@ export default function DoctorDashboard() {
     try {
       setRefreshing(true);
       const [statsData, queueData, patientsData] = await Promise.all([
-        getOPDStats(),
-        getOPDQueue(),
-        getPatients({ search: searchQuery, limit: 50 }),
+        getOPDStats().catch(() => ({})),
+        getOPDQueue().catch(() => []),
+        getPatients({ search: searchQuery, limit: 50 }).catch(() => ({ patients: [] })),
       ]);
       setStats(statsData);
 
       let mergedQueue = Array.isArray(queueData) ? [...queueData] : [];
       try {
         const storedVisits = JSON.parse(localStorage.getItem("healthconnect_opd_visits") || "[]");
-        const existingVisitIds = new Set();
-        mergedQueue.forEach((v) => {
-          if (v._id) existingVisitIds.add(String(v._id));
-          if (v.queueNumber) existingVisitIds.add(`token_${v.queueNumber}`);
+
+        // Build status map of locally stored visits
+        const storedStatusMap = new Map();
+        storedVisits.forEach((v) => {
+          if (v._id) storedStatusMap.set(String(v._id), v);
+          if (v.queueNumber) storedStatusMap.set(`token_${v.queueNumber}`, v);
+          const pId = v.patientId?._id || v.patientId?.patientId || (typeof v.patientId === "string" ? v.patientId : null);
+          if (pId) storedStatusMap.set(`patient_${String(pId).toUpperCase()}`, v);
         });
 
-        const missing = storedVisits.filter(
-          (v) => !existingVisitIds.has(String(v._id)) && !existingVisitIds.has(`token_${v.queueNumber}`)
-        );
+        // Reconcile status: if locally marked completed, it MUST stay completed!
+        mergedQueue = mergedQueue.map((v) => {
+          const pId = v.patientId?._id || v.patientId?.patientId || (typeof v.patientId === "string" ? v.patientId : null);
+          const local =
+            (v._id && storedStatusMap.get(String(v._id))) ||
+            (v.queueNumber && storedStatusMap.get(`token_${v.queueNumber}`)) ||
+            (pId && storedStatusMap.get(`patient_${String(pId).toUpperCase()}`));
 
-        if (missing.length > 0) {
-          mergedQueue.push(...missing);
-        }
+          if (local) {
+            if (local.status === "completed" || local.status === "done") {
+              return { ...v, ...local, status: "completed" };
+            }
+            if (local.status === "in-progress" && v.status === "waiting") {
+              return { ...v, ...local, status: "in-progress" };
+            }
+          }
+          return v;
+        });
+
+        // Add any visits that exist only in localStorage
+        const existingKeys = new Set();
+        mergedQueue.forEach((v) => {
+          if (v._id) existingKeys.add(String(v._id));
+          if (v.queueNumber) existingKeys.add(`token_${v.queueNumber}`);
+        });
+
+        storedVisits.forEach((v) => {
+          if (!existingKeys.has(String(v._id)) && !existingKeys.has(`token_${v.queueNumber}`)) {
+            mergedQueue.push(v);
+          }
+        });
+
+        // Persist reconciled queue locally and sync to server
+        localStorage.setItem("healthconnect_opd_visits", JSON.stringify(mergedQueue));
+        syncOPDQueue(mergedQueue).catch(() => {});
       } catch (e) {}
 
-      // Strictly sort by token queueNumber ascending (Token #1, #2, #3, ...)
-      mergedQueue.sort((a, b) => (Number(a.queueNumber) || 0) - (Number(b.queueNumber) || 0));
-      setQueue(mergedQueue);
+      const sorted = sortQueueClinically(mergedQueue);
+      setQueue(sorted);
 
       let pList = patientsData.patients || [];
       try {
@@ -112,23 +177,32 @@ export default function DoctorDashboard() {
       (typeof visit.patientId === "string" ? visit.patientId : null);
     if (!patientId) return;
 
+    const pCode = visit.patientId?.patientId;
+
     setStartingId(visit._id);
     try {
       if (visit.status === "waiting") {
-        await updateOPDStatus(visit._id, "in-progress");
+        await updateOPDStatus(visit._id, "in-progress", {
+          queueNumber: visit.queueNumber,
+          patientId,
+          patientCode: pCode,
+        }).catch(() => {});
+
         try {
           const stored = JSON.parse(localStorage.getItem("healthconnect_opd_visits") || "[]");
           const updated = stored.map((v) =>
-            v._id === visit._id ? { ...v, status: "in-progress" } : v
+            v._id === visit._id || (visit.queueNumber && v.queueNumber === visit.queueNumber)
+              ? { ...v, status: "in-progress", startedAt: new Date().toISOString() }
+              : v
           );
           localStorage.setItem("healthconnect_opd_visits", JSON.stringify(updated));
+          syncOPDQueue(updated).catch(() => {});
         } catch (e) {}
         addToast(`Consultation started for ${visit.patientId?.name || "Patient"}`, "info");
       }
       router.push(`/patient/${patientId}`);
     } catch (err) {
       console.error("Error starting consultation:", err);
-      // Fallback navigation
       router.push(`/patient/${patientId}`);
     } finally {
       setStartingId(null);
@@ -137,24 +211,57 @@ export default function DoctorDashboard() {
 
   // Complete Consultation Handler
   const handleCompleteConsultation = async (visit) => {
+    const visitId = visit._id;
+    const queueNum = visit.queueNumber;
+    const pId = visit.patientId?._id || visit.patientId?.patientId || (typeof visit.patientId === "string" ? visit.patientId : null);
+    const pCode = visit.patientId?.patientId;
+
+    // 1. Immediately update UI state
+    setQueue((prev) =>
+      sortQueueClinically(
+        prev.map((v) => {
+          const matches =
+            v._id === visitId ||
+            (queueNum && v.queueNumber === queueNum) ||
+            (pId && (v.patientId?._id === pId || v.patientId === pId || v.patientId?.patientId === pId));
+          return matches
+            ? { ...v, status: "completed", completedAt: new Date().toISOString() }
+            : v;
+        })
+      )
+    );
+
     try {
-      await updateOPDStatus(visit._id, "completed").catch(() => {});
+      // 2. Call backend status update with full metadata
+      await updateOPDStatus(visitId, "completed", {
+        queueNumber: queueNum,
+        patientId: pId,
+        patientCode: pCode,
+      }).catch(() => {});
+
+      // 3. Update localStorage
       try {
         const stored = JSON.parse(localStorage.getItem("healthconnect_opd_visits") || "[]");
-        const updated = stored.map((v) =>
-          v._id === visit._id || v.queueNumber === visit.queueNumber
+        const updated = stored.map((v) => {
+          const matches =
+            v._id === visitId ||
+            (queueNum && v.queueNumber === queueNum) ||
+            (pId && (v.patientId?._id === pId || v.patientId === pId || v.patientId?.patientId === pId));
+          return matches
             ? { ...v, status: "completed", completedAt: new Date().toISOString() }
-            : v
-        );
+            : v;
+        });
         localStorage.setItem("healthconnect_opd_visits", JSON.stringify(updated));
+        syncOPDQueue(updated).catch(() => {});
       } catch (e) {}
 
-      // Update patient status in localStorage
+      // 4. Update patient status in localStorage
       try {
-        const pId = visit.patientId?._id || visit.patientId?.patientId || visit.patientId;
         const storedP = JSON.parse(localStorage.getItem("healthconnect_custom_patients") || "[]");
         const updatedP = storedP.map((p) =>
-          p._id === pId || p.patientId === pId ? { ...p, status: "done" } : p
+          p._id === pId || p.patientId === pId || (pCode && p.patientId === pCode)
+            ? { ...p, status: "done" }
+            : p
         );
         localStorage.setItem("healthconnect_custom_patients", JSON.stringify(updatedP));
       } catch (e) {}
@@ -201,7 +308,7 @@ export default function DoctorDashboard() {
             <Clock size={24} />
           </div>
           <div>
-            <div className="stat-val">{stats.waiting}</div>
+            <div className="stat-val">{waitingPatients.length}</div>
             <div className="stat-lbl">Waiting Patients</div>
           </div>
         </div>
@@ -211,7 +318,7 @@ export default function DoctorDashboard() {
             <Activity size={24} />
           </div>
           <div>
-            <div className="stat-val">{stats.inProgress}</div>
+            <div className="stat-val">{activeConsultation ? 1 : 0}</div>
             <div className="stat-lbl">In Active Consultation</div>
           </div>
         </div>
@@ -221,7 +328,7 @@ export default function DoctorDashboard() {
             <CheckCircle2 size={24} />
           </div>
           <div>
-            <div className="stat-val">{stats.completed}</div>
+            <div className="stat-val">{Math.max(stats.completed || 0, completedToday.length)}</div>
             <div className="stat-lbl">Completed Today</div>
           </div>
         </div>
@@ -231,7 +338,7 @@ export default function DoctorDashboard() {
             <Users size={24} />
           </div>
           <div>
-            <div className="stat-val">{stats.totalPatients}</div>
+            <div className="stat-val">{Math.max(stats.totalPatients || 0, patients.length)}</div>
             <div className="stat-lbl">Total Clinic Records</div>
           </div>
         </div>
@@ -375,19 +482,38 @@ export default function DoctorDashboard() {
                     .filter(q => q.status !== "done" && q.status !== "completed")
                     .map((item) => {
                       const p = item.patientId || {};
-                      const isInProgress = item.status === "in-progress";
+                      const isEmergency = item.priority === "emergency";
+                      const isUrgent = item.priority === "urgent";
 
                       return (
-                        <tr key={item._id} style={isInProgress ? { backgroundColor: "#f0f7ff" } : {}}>
+                        <tr
+                          key={item._id}
+                          style={{
+                            backgroundColor: isInProgress
+                              ? "#f0f7ff"
+                              : isEmergency
+                              ? "#fff5f5"
+                              : isUrgent
+                              ? "#fffdf5"
+                              : "transparent",
+                            borderLeft: isEmergency
+                              ? "4px solid #dc2626"
+                              : isUrgent
+                              ? "4px solid #f59e0b"
+                              : isInProgress
+                              ? "4px solid #2563eb"
+                              : "4px solid transparent",
+                          }}
+                        >
                           <td>
-                            <span style={{ fontSize: "16px", fontWeight: "800", color: "#c62828" }}>
+                            <span style={{ fontSize: "16px", fontWeight: "800", color: isEmergency ? "#dc2626" : "#c62828" }}>
                               #{item.queueNumber || 1}
                             </span>
                           </td>
                           <td>
                             <div>
                               <Link
-                                href={`/patient/${p._id}`}
+                                href={`/patient/${p._id || p.patientId}`}
                                 style={{ fontWeight: "700", color: "#0f172a", display: "flex", alignItems: "center", gap: "6px" }}
                               >
                                 <span>{p.name}</span>
@@ -406,19 +532,21 @@ export default function DoctorDashboard() {
                             <span className="badge badge-pill">{p.bloodGroup || "O+"}</span>
                           </td>
                           <td>
-                            <span style={{ fontSize: "13px", fontWeight: "500" }}>
+                            <span style={{ fontSize: "13px", fontWeight: isEmergency ? "700" : "500", color: isEmergency ? "#991b1b" : "#1e293b" }}>
                               {item.chiefComplaint || "General Consultation"}
                             </span>
                           </td>
                           <td>
                             <span
                               className={`badge ${
-                                item.priority === "urgent" || item.priority === "emergency"
+                                isEmergency
+                                  ? "badge-emergency"
+                                  : isUrgent
                                   ? "badge-urgent"
                                   : "badge-pill"
                               }`}
                             >
-                              {item.priority || "Normal"}
+                              {isEmergency ? "🚨 EMERGENCY" : isUrgent ? "URGENT" : "Normal"}
                             </span>
                           </td>
                           <td>

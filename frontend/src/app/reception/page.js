@@ -33,6 +33,35 @@ import {
 import { useToast } from "@/components/Toast";
 import Loader, { SkeletonRow } from "@/components/Loader";
 
+// Priority tier: Emergency = 0 (highest), Urgent = 1, Normal = 2
+const priorityTier = (p) => {
+  const s = String(p || "").toLowerCase();
+  if (s === "emergency") return 0;
+  if (s === "urgent" || s === "priority") return 1;
+  return 2;
+};
+
+// Clinically sort OPD Queue: in-progress first, then emergency, then urgent, then normal (FIFO by token within each tier)
+export const sortQueueClinically = (visits) => {
+  return [...visits].sort((a, b) => {
+    if (a.status === "in-progress" && b.status !== "in-progress") return -1;
+    if (b.status === "in-progress" && a.status !== "in-progress") return 1;
+
+    const aDone = a.status === "completed" || a.status === "done";
+    const bDone = b.status === "completed" || b.status === "done";
+    if (aDone && !bDone) return 1;
+    if (!aDone && bDone) return -1;
+
+    const tierA = priorityTier(a.priority);
+    const tierB = priorityTier(b.priority);
+    if (tierA !== tierB) {
+      return tierA - tierB;
+    }
+
+    return (Number(a.queueNumber) || 0) - (Number(b.queueNumber) || 0);
+  });
+};
+
 export default function ReceptionDashboard() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -93,40 +122,63 @@ export default function ReceptionDashboard() {
     try {
       setRefreshing(true);
       const [statsData, queueData] = await Promise.all([
-        getOPDStats(),
-        getOPDQueue(),
+        getOPDStats().catch(() => ({})),
+        getOPDQueue().catch(() => []),
       ]);
 
       // Merge server visits with localStorage visits to maintain 100% consistent state across serverless instances
       let mergedQueue = Array.isArray(queueData) ? [...queueData] : [];
       try {
         const storedVisits = JSON.parse(localStorage.getItem("healthconnect_opd_visits") || "[]");
+
+        // Build status map of locally stored visits
+        const storedStatusMap = new Map();
+        storedVisits.forEach((v) => {
+          if (v._id) storedStatusMap.set(String(v._id), v);
+          if (v.queueNumber) storedStatusMap.set(`token_${v.queueNumber}`, v);
+          const pId = v.patientId?._id || v.patientId?.patientId || (typeof v.patientId === "string" ? v.patientId : null);
+          if (pId) storedStatusMap.set(`patient_${String(pId).toUpperCase()}`, v);
+        });
+
+        // Reconcile status: if marked completed locally or on server, keep it completed
+        mergedQueue = mergedQueue.map((v) => {
+          const pId = v.patientId?._id || v.patientId?.patientId || (typeof v.patientId === "string" ? v.patientId : null);
+          const local =
+            (v._id && storedStatusMap.get(String(v._id))) ||
+            (v.queueNumber && storedStatusMap.get(`token_${v.queueNumber}`)) ||
+            (pId && storedStatusMap.get(`patient_${String(pId).toUpperCase()}`));
+
+          if (local) {
+            if (local.status === "completed" || local.status === "done") {
+              return { ...v, ...local, status: "completed" };
+            }
+            if (local.status === "in-progress" && v.status === "waiting") {
+              return { ...v, ...local, status: "in-progress" };
+            }
+          }
+          return v;
+        });
+
         const existingVisitIds = new Set();
         mergedQueue.forEach((v) => {
           if (v._id) existingVisitIds.add(String(v._id));
           if (v.queueNumber) existingVisitIds.add(`token_${v.queueNumber}`);
         });
 
-        const missing = storedVisits.filter(
-          (v) => !existingVisitIds.has(String(v._id)) && !existingVisitIds.has(`token_${v.queueNumber}`)
-        );
+        storedVisits.forEach((v) => {
+          if (!existingVisitIds.has(String(v._id)) && !existingVisitIds.has(`token_${v.queueNumber}`)) {
+            mergedQueue.push(v);
+          }
+        });
 
-        if (missing.length > 0) {
-          mergedQueue.push(...missing);
-        }
-
-        // Strictly sort by token queueNumber ascending (Token #1, #2, #3, ...)
-        mergedQueue.sort((a, b) => (Number(a.queueNumber) || 0) - (Number(b.queueNumber) || 0));
+        // Clinically sort: emergency -> urgent -> normal
+        mergedQueue = sortQueueClinically(mergedQueue);
 
         // Save persistent queue to localStorage
         localStorage.setItem("healthconnect_opd_visits", JSON.stringify(mergedQueue));
-
-        // Background sync to server so all lambda containers stay updated
-        if (missing.length > 0) {
-          syncOPDQueue(mergedQueue).catch(() => {});
-        }
+        syncOPDQueue(mergedQueue).catch(() => {});
       } catch (e) {
-        mergedQueue.sort((a, b) => (Number(a.queueNumber) || 0) - (Number(b.queueNumber) || 0));
+        mergedQueue = sortQueueClinically(mergedQueue);
       }
 
       setQueue(mergedQueue);
@@ -136,8 +188,7 @@ export default function ReceptionDashboard() {
       const inProgressCount = mergedQueue.filter((v) => v.status === "in-progress").length;
       const completedCount = Math.max(
         statsData?.completed || 0,
-        mergedQueue.filter((v) => v.status === "done" || v.status === "completed").length,
-        5
+        mergedQueue.filter((v) => v.status === "done" || v.status === "completed").length
       );
 
       let currentTotalPatients = statsData?.totalPatients || 10;
@@ -151,7 +202,7 @@ export default function ReceptionDashboard() {
         waiting: waitingCount,
         inProgress: inProgressCount,
         completed: completedCount,
-        today: mergedQueue.length + completedCount,
+        today: Math.max(mergedQueue.length, waitingCount + inProgressCount + completedCount),
       });
     } catch (err) {
       console.error("Error fetching dashboard data:", err);
@@ -318,16 +369,19 @@ export default function ReceptionDashboard() {
       // Immediately cache visit to localStorage to ensure instant persistence
       try {
         const storedVisits = JSON.parse(localStorage.getItem("healthconnect_opd_visits") || "[]");
-        const exists = storedVisits.some(
+        const existingIdx = storedVisits.findIndex(
           (v) =>
             (v._id && v._id === visit._id) ||
             (v.queueNumber && visit.queueNumber && v.queueNumber === visit.queueNumber)
         );
-        if (!exists) {
+        if (existingIdx !== -1) {
+          storedVisits[existingIdx] = { ...storedVisits[existingIdx], ...visit };
+        } else {
           storedVisits.push(visit);
-          storedVisits.sort((a, b) => (Number(a.queueNumber) || 0) - (Number(b.queueNumber) || 0));
-          localStorage.setItem("healthconnect_opd_visits", JSON.stringify(storedVisits));
         }
+        const clinicallySorted = sortQueueClinically(storedVisits);
+        localStorage.setItem("healthconnect_opd_visits", JSON.stringify(clinicallySorted));
+        syncOPDQueue(clinicallySorted).catch(() => {});
       } catch (e) {}
 
       if (visit?.alreadyQueued) {
@@ -335,6 +389,10 @@ export default function ReceptionDashboard() {
           visit.message || `Patient is already in today's OPD queue as Token #${visit.queueNumber}`,
           "info"
         );
+      } else if (visitForm.priority === "emergency") {
+        addToast(`🚨 EMERGENCY Token #${visit.queueNumber} created & prioritized at top of queue for ${selectedPatientForVisit.name}`, "error");
+      } else if (visitForm.priority === "urgent") {
+        addToast(`⚡ URGENT Token #${visit.queueNumber} prioritized for ${selectedPatientForVisit.name}`, "info");
       } else {
         addToast(`OPD Token #${visit.queueNumber} created for ${selectedPatientForVisit.name}`, "success");
       }
@@ -493,7 +551,7 @@ export default function ReceptionDashboard() {
               <tbody>
                 {loadingQueue ? (
                   Array.from({ length: 4 }).map((_, i) => <SkeletonRow key={i} cols={7} />)
-                ) : queue.length === 0 ? (
+                ) : queue.filter(q => q.status !== "done" && q.status !== "completed").length === 0 ? (
                   <tr>
                     <td colSpan={7}>
                       <div className="empty-state">
@@ -513,55 +571,81 @@ export default function ReceptionDashboard() {
                     </td>
                   </tr>
                 ) : (
-                  queue.map((item) => {
-                    const p = item.patientId || {};
-                    return (
-                      <tr key={item._id}>
-                        <td>
-                          <span style={{ fontSize: "15px", fontWeight: "800", color: "#c62828" }}>
-                            #{item.queueNumber || 1}
-                          </span>
-                        </td>
-                        <td>
-                          <div style={{ display: "flex", flexDirection: "column" }}>
-                            <Link
-                              href={`/patient/${p._id}`}
-                              style={{ fontWeight: "700", color: "#0f172a", display: "flex", alignItems: "center", gap: "6px" }}
-                            >
-                              <span>{p.name || "Patient"}</span>
-                              <Eye size={13} color="#64748b" />
-                            </Link>
-                            <span style={{ fontSize: "12px", color: "#64748b" }}>
-                              {p.patientId || "HC-000000"} • {p.age} yrs • {p.gender} • Blood: {p.bloodGroup || "O+"}
+                  queue
+                    .filter(q => q.status !== "done" && q.status !== "completed")
+                    .map((item) => {
+                      const p = item.patientId || {};
+                      const isEmergency = item.priority === "emergency";
+                      const isUrgent = item.priority === "urgent";
+                      const isInProgress = item.status === "in-progress";
+
+                      return (
+                        <tr
+                          key={item._id}
+                          style={{
+                            backgroundColor: isInProgress
+                              ? "#f0f7ff"
+                              : isEmergency
+                              ? "#fff5f5"
+                              : isUrgent
+                              ? "#fffdf5"
+                              : "transparent",
+                            borderLeft: isEmergency
+                              ? "4px solid #dc2626"
+                              : isUrgent
+                              ? "4px solid #f59e0b"
+                              : isInProgress
+                              ? "4px solid #2563eb"
+                              : "4px solid transparent",
+                          }}
+                        >
+                          <td>
+                            <span style={{ fontSize: "15px", fontWeight: "800", color: isEmergency ? "#dc2626" : "#c62828" }}>
+                              #{item.queueNumber || 1}
                             </span>
-                          </div>
-                        </td>
-                        <td>
-                          <span style={{ fontSize: "13px", fontWeight: "500" }}>
-                            {item.chiefComplaint || "General Consultation"}
-                          </span>
-                        </td>
-                        <td>
-                          <span
-                            className={`badge ${
-                              item.priority === "urgent" || item.priority === "emergency"
-                                ? "badge-urgent"
-                                : "badge-pill"
-                            }`}
-                          >
-                            {item.priority || "Normal"}
-                          </span>
-                        </td>
-                        <td>
-                          <span style={{ fontSize: "12px", color: "#64748b" }}>
-                            {item.createdAt ? new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Recently"}
-                          </span>
-                        </td>
-                        <td>
-                          <span className={`badge badge-${item.status}`}>
-                            {item.status === "in-progress" ? "In Consultation" : item.status}
-                          </span>
-                        </td>
+                          </td>
+                          <td>
+                            <div style={{ display: "flex", flexDirection: "column" }}>
+                              <Link
+                                href={`/patient/${p._id || p.patientId}`}
+                                style={{ fontWeight: "700", color: "#0f172a", display: "flex", alignItems: "center", gap: "6px" }}
+                              >
+                                <span>{p.name || "Patient"}</span>
+                                <Eye size={13} color="#64748b" />
+                              </Link>
+                              <span style={{ fontSize: "12px", color: "#64748b" }}>
+                                {p.patientId || "HC-000000"} • {p.age} yrs • {p.gender} • Blood: {p.bloodGroup || "O+"}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <span style={{ fontSize: "13px", fontWeight: isEmergency ? "700" : "500", color: isEmergency ? "#991b1b" : "#1e293b" }}>
+                              {item.chiefComplaint || "General Consultation"}
+                            </span>
+                          </td>
+                          <td>
+                            <span
+                              className={`badge ${
+                                isEmergency
+                                  ? "badge-emergency"
+                                  : isUrgent
+                                  ? "badge-urgent"
+                                  : "badge-pill"
+                              }`}
+                            >
+                              {isEmergency ? "🚨 EMERGENCY" : isUrgent ? "URGENT" : "Normal"}
+                            </span>
+                          </td>
+                          <td>
+                            <span style={{ fontSize: "12px", color: "#64748b" }}>
+                              {item.createdAt ? new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Recently"}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`badge badge-${item.status}`}>
+                              {item.status === "in-progress" ? "In Consultation" : item.status}
+                            </span>
+                          </td>
                         <td>
                           <div style={{ display: "flex", gap: "6px" }}>
                             <button

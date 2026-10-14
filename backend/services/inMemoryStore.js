@@ -254,36 +254,37 @@ export const loadMemoryState = () => {
     if (fs.existsSync(PATIENTS_FILE)) {
       const data = JSON.parse(fs.readFileSync(PATIENTS_FILE, "utf8"));
       if (Array.isArray(data) && data.length > 0) {
-        const existingIds = new Set();
-        memoryPatients.forEach((p) => {
-          if (p.patientId) existingIds.add(String(p.patientId).toUpperCase());
-          if (p._id) existingIds.add(String(p._id));
-        });
-        const newOnes = [];
         data.forEach((p) => {
-          const hasPId = p.patientId && existingIds.has(String(p.patientId).toUpperCase());
-          const hasId = p._id && existingIds.has(String(p._id));
-          if (!hasPId && !hasId) {
-            if (p.patientId) existingIds.add(String(p.patientId).toUpperCase());
-            if (p._id) existingIds.add(String(p._id));
-            newOnes.push(p);
+          if (!p) return;
+          const idx = memoryPatients.findIndex(
+            (item) =>
+              (p.patientId && String(item.patientId).toUpperCase() === String(p.patientId).toUpperCase()) ||
+              (p._id && String(item._id) === String(p._id))
+          );
+          if (idx !== -1) {
+            memoryPatients[idx] = { ...memoryPatients[idx], ...p };
+          } else {
+            memoryPatients.unshift(p);
           }
         });
-        memoryPatients.unshift(...newOnes);
       }
     }
     if (fs.existsSync(VISITS_FILE)) {
       const data = JSON.parse(fs.readFileSync(VISITS_FILE, "utf8"));
       if (Array.isArray(data) && data.length > 0) {
-        const existingVisitIds = new Set(memoryOPDVisits.map((v) => String(v._id)));
-        const newOnes = [];
         data.forEach((v) => {
-          if (v._id && !existingVisitIds.has(String(v._id))) {
-            existingVisitIds.add(String(v._id));
-            newOnes.push(v);
+          if (!v || !v._id) return;
+          const idx = memoryOPDVisits.findIndex(
+            (item) =>
+              String(item._id) === String(v._id) ||
+              (v.queueNumber && Number(item.queueNumber) === Number(v.queueNumber))
+          );
+          if (idx !== -1) {
+            memoryOPDVisits[idx] = { ...memoryOPDVisits[idx], ...v };
+          } else {
+            memoryOPDVisits.unshift(v);
           }
         });
-        memoryOPDVisits.unshift(...newOnes);
       }
     }
     if (fs.existsSync(RECORDS_FILE)) {
