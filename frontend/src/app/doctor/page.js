@@ -484,6 +484,7 @@ export default function DoctorDashboard() {
                       const p = item.patientId || {};
                       const isEmergency = item.priority === "emergency";
                       const isUrgent = item.priority === "urgent";
+                      const isInProgress = item.status === "in-progress";
 
                       return (
                         <tr
