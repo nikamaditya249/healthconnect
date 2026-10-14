@@ -41,6 +41,7 @@ import {
   searchPatientRecordsAI,
   extractDocumentInsightsAI,
   createOPDVisit,
+  updateOPDStatus,
   syncPatients,
   syncMedicalRecords,
   syncMedicalDocuments,
@@ -58,6 +59,7 @@ export default function PatientProfilePage() {
   const [patient, setPatient] = useState(null);
   const [records, setRecords] = useState([]);
   const [documents, setDocuments] = useState([]);
+  const [activeVisit, setActiveVisit] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
 
@@ -205,6 +207,23 @@ export default function PatientProfilePage() {
         );
       } catch (e) {}
 
+      // Check for active or waiting OPD visit for this patient
+      try {
+        const storedVisits = JSON.parse(localStorage.getItem("healthconnect_opd_visits") || "[]");
+        const targetId = String(pData?._id || id).toUpperCase();
+        const targetCode = String(pData?.patientId || (String(id).startsWith("HC-") ? id : "")).toUpperCase();
+
+        const currentVisit = storedVisits.find((v) => {
+          const vPid = String(v.patientId?._id || v.patientId?.patientId || v.patientId || "").toUpperCase();
+          const vCode = String(v.patientId?.patientId || "").toUpperCase();
+          const matches =
+            (targetId && vPid === targetId) ||
+            (targetCode && (vPid === targetCode || vCode === targetCode));
+          return matches && (v.status === "in-progress" || v.status === "waiting");
+        });
+        setActiveVisit(currentVisit || null);
+      } catch (e) {}
+
       // Sort chronological descending (latest first)
       mergedRecords.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       mergedDocs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -223,6 +242,70 @@ export default function PatientProfilePage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Complete Visit Directly
+  const handleFinishAndCompleteVisit = async () => {
+    const pId = patient?._id || patient?.patientId || id;
+    const pCode = patient?.patientId || (String(id).startsWith("HC-") ? id : "");
+
+    let visitToComplete = activeVisit;
+    if (!visitToComplete) {
+      try {
+        const storedVisits = JSON.parse(localStorage.getItem("healthconnect_opd_visits") || "[]");
+        visitToComplete = storedVisits.find((v) => {
+          const vPid = String(v.patientId?._id || v.patientId?.patientId || v.patientId || "").toUpperCase();
+          const vCode = String(v.patientId?.patientId || "").toUpperCase();
+          const match =
+            (pId && vPid === String(pId).toUpperCase()) ||
+            (pCode && (vPid === String(pCode).toUpperCase() || vCode === String(pCode).toUpperCase()));
+          return match && v.status !== "completed" && v.status !== "done";
+        });
+      } catch (e) {}
+    }
+
+    try {
+      // 1. Update backend
+      const targetVisitId = visitToComplete?._id || pId;
+      if (targetVisitId) {
+        await updateOPDStatus(targetVisitId, "completed").catch(() => {});
+      }
+
+      // 2. Update localStorage healthconnect_opd_visits
+      try {
+        const stored = JSON.parse(localStorage.getItem("healthconnect_opd_visits") || "[]");
+        const updated = stored.map((v) => {
+          const vPid = String(v.patientId?._id || v.patientId?.patientId || v.patientId || "").toUpperCase();
+          const vCode = String(v.patientId?.patientId || "").toUpperCase();
+          const matches =
+            (visitToComplete && v._id === visitToComplete._id) ||
+            (pId && vPid === String(pId).toUpperCase()) ||
+            (pCode && (vPid === String(pCode).toUpperCase() || vCode === String(pCode).toUpperCase()));
+          return matches ? { ...v, status: "completed", completedAt: new Date().toISOString() } : v;
+        });
+        localStorage.setItem("healthconnect_opd_visits", JSON.stringify(updated));
+      } catch (e) {}
+
+      // 3. Update localStorage healthconnect_custom_patients
+      try {
+        const storedP = JSON.parse(localStorage.getItem("healthconnect_custom_patients") || "[]");
+        const updatedP = storedP.map((p) => {
+          const matches =
+            String(p._id).toUpperCase() === String(pId).toUpperCase() ||
+            String(p.patientId).toUpperCase() === String(pCode || pId).toUpperCase();
+          return matches ? { ...p, status: "done" } : p;
+        });
+        localStorage.setItem("healthconnect_custom_patients", JSON.stringify(updatedP));
+      } catch (e) {}
+
+      setActiveVisit(null);
+      addToast(`Visit for ${patient?.name || "Patient"} completed and moved to Completed Visits!`, "success");
+      router.push("/doctor");
+    } catch (err) {
+      console.error("Error completing visit:", err);
+      addToast("Consultation marked completed", "success");
+      router.push("/doctor");
+    }
+  };
 
   // Medicine Row Handlers
   const handleAddMedicine = () => {
@@ -366,7 +449,48 @@ export default function PatientProfilePage() {
         });
       }
 
-      addToast("Consultation saved and added to medical timeline!", "success");
+      // Automatically mark active OPD visit as completed and patient status as done
+      try {
+        const pId = patient?._id || patient?.patientId || id;
+        const pCode = patient?.patientId || (String(id).startsWith("HC-") ? id : "");
+
+        const storedVisits = JSON.parse(localStorage.getItem("healthconnect_opd_visits") || "[]");
+        let foundVisitId = null;
+        const updatedVisits = storedVisits.map((v) => {
+          const vPid = String(v.patientId?._id || v.patientId?.patientId || v.patientId || "").toUpperCase();
+          const vCode = String(v.patientId?.patientId || "").toUpperCase();
+          const matches =
+            (pId && vPid === String(pId).toUpperCase()) ||
+            (pCode && (vPid === String(pCode).toUpperCase() || vCode === String(pCode).toUpperCase()));
+          if (matches && v.status !== "completed" && v.status !== "done") {
+            foundVisitId = v._id;
+            return { ...v, status: "completed", completedAt: new Date().toISOString() };
+          }
+          return v;
+        });
+        localStorage.setItem("healthconnect_opd_visits", JSON.stringify(updatedVisits));
+
+        // Sync visit completion to backend
+        const targetVisitId = foundVisitId || activeVisit?._id || pId;
+        if (targetVisitId) {
+          updateOPDStatus(targetVisitId, "completed").catch(() => {});
+        }
+
+        // Update patient status in local custom patients
+        const storedP = JSON.parse(localStorage.getItem("healthconnect_custom_patients") || "[]");
+        const updatedP = storedP.map((p) => {
+          const matches =
+            String(p._id).toUpperCase() === String(pId).toUpperCase() ||
+            String(p.patientId).toUpperCase() === String(pCode || pId).toUpperCase();
+          return matches ? { ...p, status: "done" } : p;
+        });
+        localStorage.setItem("healthconnect_custom_patients", JSON.stringify(updatedP));
+        setActiveVisit(null);
+      } catch (e) {
+        console.error("Error updating OPD status after consultation:", e);
+      }
+
+      addToast("Consultation saved & visit marked completed! Patient listed in Completed Visits.", "success");
       setShowConsultModal(false);
 
       // Reset form
@@ -509,16 +633,40 @@ export default function PatientProfilePage() {
           <span>Back to {role === "doctor" ? "Doctor Station" : "Reception Desk"}</span>
         </button>
 
-        <div style={{ display: "flex", gap: "10px" }}>
+        <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
           {role !== "receptionist" && (
-            <button
-              onClick={() => setShowConsultModal(true)}
-              className="btn btn-primary btn-sm"
-              style={{ gap: "6px" }}
-            >
-              <Plus size={16} />
-              <span>+ Add Consultation</span>
-            </button>
+            <>
+              <button
+                onClick={() => setShowConsultModal(true)}
+                className="btn btn-primary btn-sm"
+                style={{ gap: "6px" }}
+                id="add-consultation-top-btn"
+              >
+                <Plus size={16} />
+                <span>+ Add Consultation</span>
+              </button>
+
+              <button
+                onClick={handleFinishAndCompleteVisit}
+                className="btn btn-sm"
+                style={{
+                  gap: "6px",
+                  backgroundColor: "#059669",
+                  color: "#ffffff",
+                  border: "none",
+                  fontWeight: "600",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  boxShadow: "0 2px 4px rgba(5, 150, 105, 0.2)",
+                  cursor: "pointer",
+                }}
+                id="submit-complete-visit-btn"
+                title="Finish consultation and list patient under Completed Visits"
+              >
+                <CheckCircle2 size={16} />
+                <span>Submit & Complete Visit</span>
+              </button>
+            </>
           )}
 
           <button
@@ -620,6 +768,78 @@ export default function PatientProfilePage() {
           </div>
         </div>
       </div>
+
+      {/* Active OPD Consultation Banner if patient is in progress or waiting */}
+      {activeVisit && (
+        <div
+          style={{
+            marginBottom: "22px",
+            padding: "16px 20px",
+            borderRadius: "12px",
+            backgroundColor: "#ecfdf5",
+            border: "1px solid #a7f3d0",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "14px",
+          }}
+          id="active-consultation-banner"
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+            <div
+              style={{
+                width: "42px",
+                height: "42px",
+                borderRadius: "10px",
+                backgroundColor: "#10b981",
+                color: "#ffffff",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Stethoscope size={22} />
+            </div>
+            <div>
+              <div style={{ fontWeight: "700", color: "#065f46", fontSize: "15px" }}>
+                Active OPD Consultation in Progress (Token #{activeVisit.queueNumber || 1})
+              </div>
+              <div style={{ fontSize: "13px", color: "#047857", marginTop: "2px" }}>
+                Started at {activeVisit.startedAt ? new Date(activeVisit.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Recently"}. When consultation is done, click &quot;Submit &amp; Complete&quot; to list under Completed Visits.
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: "10px" }}>
+            <button
+              onClick={() => setShowConsultModal(true)}
+              className="btn btn-primary btn-sm"
+              style={{ gap: "6px" }}
+            >
+              <Plus size={15} />
+              <span>Add Consultation &amp; Rx</span>
+            </button>
+            <button
+              onClick={handleFinishAndCompleteVisit}
+              className="btn btn-sm"
+              style={{
+                gap: "6px",
+                backgroundColor: "#059669",
+                color: "#ffffff",
+                border: "none",
+                fontWeight: "600",
+                display: "inline-flex",
+                alignItems: "center",
+                boxShadow: "0 2px 4px rgba(5, 150, 105, 0.2)",
+                cursor: "pointer",
+              }}
+            >
+              <CheckCircle2 size={15} />
+              <span>Submit &amp; Complete</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Tabs Bar */}
       <div className="tabs-nav">
@@ -1350,8 +1570,22 @@ export default function PatientProfilePage() {
                 <button type="button" onClick={() => setShowConsultModal(false)} className="btn btn-secondary">
                   Cancel
                 </button>
-                <button type="submit" disabled={savingConsult} className="btn btn-primary">
-                  {savingConsult ? "Saving Consultation..." : "Save Consultation & Update Timeline"}
+                <button
+                  type="submit"
+                  disabled={savingConsult}
+                  className="btn btn-primary"
+                  style={{
+                    backgroundColor: "#059669",
+                    borderColor: "#059669",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    fontWeight: "600",
+                  }}
+                  id="submit-consultation-modal-btn"
+                >
+                  <CheckCircle2 size={16} />
+                  <span>{savingConsult ? "Submitting Consultation..." : "Submit Consultation & Complete Visit"}</span>
                 </button>
               </div>
             </form>

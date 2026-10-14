@@ -380,31 +380,41 @@ router.post(["/visit", "/visits", "/add", "/", "/queue"], optionalAuth, async (r
   }
 });
 
-// UPDATE VISIT STATUS (waiting -> in-progress -> done)
-router.put(["/visit/:id/status", "/:id/complete", "/:id/status"], optionalAuth, async (req, res) => {
+// UPDATE VISIT STATUS (waiting -> in-progress -> done/completed)
+const handleUpdateVisitStatus = async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id || req.body.visitId || req.body.patientId;
     let nextStatus = req.body.status;
 
     // Handle legacy route /:id/complete without body
-    if (req.url.includes("complete")) {
+    if (req.url.includes("complete") || !nextStatus) {
       nextStatus = "completed";
     }
 
-    if (!nextStatus) {
-      return res.status(400).json({ error: "Status is required" });
+    if (!id) {
+      return res.status(400).json({ error: "Visit ID or Patient ID is required" });
     }
 
     if (isFallbackActive()) {
-      let v = memoryOPDVisits.find((item) => item._id === id);
+      const matchVisit = (item) =>
+        String(item._id) === String(id) ||
+        String(item.patientId?._id || item.patientId) === String(id) ||
+        String(item.patientId?.patientId || "").toUpperCase() === String(id).toUpperCase();
+
+      let v = memoryOPDVisits.find(matchVisit);
       if (!v) {
         loadMemoryState();
-        v = memoryOPDVisits.find((item) => item._id === id);
+        v = memoryOPDVisits.find(matchVisit);
       }
       if (v) {
         v.status = nextStatus;
+        if (nextStatus === "done" || nextStatus === "completed") {
+          v.completedAt = new Date().toISOString();
+        } else if (nextStatus === "in-progress") {
+          v.startedAt = new Date().toISOString();
+        }
         if (v.patientId && typeof v.patientId === "object") {
-          v.patientId.status = nextStatus;
+          v.patientId.status = (nextStatus === "completed" || nextStatus === "done") ? "done" : nextStatus;
         }
         saveMemoryState();
         return res.json(v);
@@ -419,9 +429,33 @@ router.put(["/visit/:id/status", "/:id/complete", "/:id/status"], optionalAuth, 
       updateFields.completedAt = new Date();
     }
 
-    const updated = await OPDVisit.findByIdAndUpdate(id, updateFields, { new: true })
-      .populate("patientId")
-      .populate("doctorId", "name");
+    let updated = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      updated = await OPDVisit.findByIdAndUpdate(id, updateFields, { new: true })
+        .populate("patientId")
+        .populate("doctorId", "name");
+    }
+
+    // If not found by direct visit ObjectId, attempt lookup by patient
+    if (!updated) {
+      let patientObjId = null;
+      if (mongoose.Types.ObjectId.isValid(id)) {
+        patientObjId = id;
+      } else {
+        const p = await Patient.findOne({ patientId: new RegExp(`^${id}$`, "i") });
+        if (p) patientObjId = p._id;
+      }
+
+      if (patientObjId) {
+        updated = await OPDVisit.findOneAndUpdate(
+          { patientId: patientObjId, status: { $in: ["waiting", "in-progress"] } },
+          updateFields,
+          { new: true, sort: { createdAt: -1 } }
+        )
+          .populate("patientId")
+          .populate("doctorId", "name");
+      }
+    }
 
     if (!updated) {
       return res.status(404).json({ error: "OPD Visit not found" });
@@ -439,7 +473,7 @@ router.put(["/visit/:id/status", "/:id/complete", "/:id/status"], optionalAuth, 
       userRole: req.user?.role || "system",
       action: `OPD_STATUS_${nextStatus.toUpperCase()}`,
       entityType: "OPDVisit",
-      entityId: id,
+      entityId: String(updated._id || id),
     });
 
     res.json(updated);
@@ -447,7 +481,11 @@ router.put(["/visit/:id/status", "/:id/complete", "/:id/status"], optionalAuth, 
     console.error("Error updating visit status:", err);
     res.status(500).json({ error: "Failed to update visit status", details: err.message });
   }
-});
+};
+
+router.put(["/visit/:id/status", "/:id/complete", "/:id/status", "/complete/:id", "/:id"], optionalAuth, handleUpdateVisitStatus);
+router.patch(["/visit/:id/status", "/:id/complete", "/:id/status", "/complete/:id", "/:id"], optionalAuth, handleUpdateVisitStatus);
+router.post(["/complete", "/visit/complete"], optionalAuth, handleUpdateVisitStatus);
 
 // Backward compatibility for root appointments GET
 router.get("/", async (req, res) => {

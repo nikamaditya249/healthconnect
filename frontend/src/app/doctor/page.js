@@ -135,6 +135,38 @@ export default function DoctorDashboard() {
     }
   };
 
+  // Complete Consultation Handler
+  const handleCompleteConsultation = async (visit) => {
+    try {
+      await updateOPDStatus(visit._id, "completed").catch(() => {});
+      try {
+        const stored = JSON.parse(localStorage.getItem("healthconnect_opd_visits") || "[]");
+        const updated = stored.map((v) =>
+          v._id === visit._id || v.queueNumber === visit.queueNumber
+            ? { ...v, status: "completed", completedAt: new Date().toISOString() }
+            : v
+        );
+        localStorage.setItem("healthconnect_opd_visits", JSON.stringify(updated));
+      } catch (e) {}
+
+      // Update patient status in localStorage
+      try {
+        const pId = visit.patientId?._id || visit.patientId?.patientId || visit.patientId;
+        const storedP = JSON.parse(localStorage.getItem("healthconnect_custom_patients") || "[]");
+        const updatedP = storedP.map((p) =>
+          p._id === pId || p.patientId === pId ? { ...p, status: "done" } : p
+        );
+        localStorage.setItem("healthconnect_custom_patients", JSON.stringify(updatedP));
+      } catch (e) {}
+
+      addToast(`Visit for ${visit.patientId?.name || "Patient"} marked completed and moved to Completed Visits!`, "success");
+      fetchData();
+    } catch (err) {
+      console.error("Error completing consultation:", err);
+      fetchData();
+    }
+  };
+
   const activeConsultation = queue.find((q) => q.status === "in-progress");
   const waitingPatients = queue.filter((q) => q.status === "waiting");
   const completedToday = queue.filter((q) => q.status === "done" || q.status === "completed");
@@ -246,14 +278,25 @@ export default function DoctorDashboard() {
             </div>
           </div>
 
-          <button
-            onClick={() => router.push(`/patient/${activeConsultation.patientId._id}`)}
-            className="btn btn-primary btn-sm"
-            style={{ backgroundColor: "#2563eb" }}
-          >
-            <span>Continue Consultation</span>
-            <ArrowRight size={15} />
-          </button>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <button
+              onClick={() => router.push(`/patient/${activeConsultation.patientId._id}`)}
+              className="btn btn-primary btn-sm"
+              style={{ backgroundColor: "#2563eb", gap: "6px" }}
+            >
+              <span>Resume Consultation</span>
+              <ArrowRight size={15} />
+            </button>
+            <button
+              onClick={() => handleCompleteConsultation(activeConsultation)}
+              className="btn btn-sm"
+              style={{ backgroundColor: "#059669", color: "#ffffff", gap: "6px", fontWeight: "600" }}
+              title="Finish consultation and move patient to Completed Visits"
+            >
+              <CheckCircle2 size={15} />
+              <span>Complete & Submit</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -384,18 +427,37 @@ export default function DoctorDashboard() {
                             </span>
                           </td>
                           <td>
-                            <button
-                              onClick={() => handleStartConsultation(item)}
-                              disabled={startingId === item._id}
-                              className={`btn ${isInProgress ? "btn-primary" : "btn-primary"} btn-sm`}
-                              style={{
-                                backgroundColor: isInProgress ? "#2563eb" : "#c62828",
-                                gap: "5px",
-                              }}
-                            >
-                              <Stethoscope size={14} />
-                              <span>{isInProgress ? "Resume" : "Start Consultation"}</span>
-                            </button>
+                            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+                              <button
+                                onClick={() => handleStartConsultation(item)}
+                                disabled={startingId === item._id}
+                                className={`btn ${isInProgress ? "btn-primary" : "btn-primary"} btn-sm`}
+                                style={{
+                                  backgroundColor: isInProgress ? "#2563eb" : "#c62828",
+                                  gap: "5px",
+                                }}
+                              >
+                                <Stethoscope size={14} />
+                                <span>{isInProgress ? "Resume" : "Start Consultation"}</span>
+                              </button>
+
+                              {isInProgress && (
+                                <button
+                                  onClick={() => handleCompleteConsultation(item)}
+                                  className="btn btn-sm"
+                                  style={{
+                                    backgroundColor: "#059669",
+                                    color: "#ffffff",
+                                    gap: "5px",
+                                    fontWeight: "600",
+                                  }}
+                                  title="Mark consultation as completed and move to Completed Visits"
+                                >
+                                  <CheckCircle2 size={14} />
+                                  <span>Complete</span>
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -518,36 +580,44 @@ export default function DoctorDashboard() {
                     </td>
                   </tr>
                 ) : (
-                  completedToday.map((c) => (
-                    <tr key={c._id}>
-                      <td>
-                        <span style={{ fontWeight: "700", color: "#047857" }}>
-                          #{c.queueNumber}
-                        </span>
-                      </td>
-                      <td>
-                        <span style={{ fontWeight: "700" }}>{c.patientId?.name}</span>
-                        <div style={{ fontSize: "11px", color: "#64748b" }}>
-                          {c.patientId?.patientId}
-                        </div>
-                      </td>
-                      <td>{c.chiefComplaint}</td>
-                      <td>
-                        <span style={{ fontSize: "12px", color: "#64748b" }}>
-                          {c.completedAt ? new Date(c.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Completed"}
-                        </span>
-                      </td>
-                      <td>
-                        <button
-                          onClick={() => router.push(`/patient/${c.patientId?._id}`)}
-                          className="btn btn-secondary btn-sm"
-                        >
-                          <FileText size={14} />
-                          <span>View EHR</span>
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                  completedToday.map((c) => {
+                    const p = c.patientId && typeof c.patientId === "object" ? c.patientId : {};
+                    const pTargetId = p._id || p.patientId || (typeof c.patientId === "string" ? c.patientId : null);
+                    const pName = p.name || "Patient";
+                    const pCode = p.patientId || (typeof c.patientId === "string" ? c.patientId : "HC-000000");
+
+                    return (
+                      <tr key={c._id}>
+                        <td>
+                          <span style={{ fontWeight: "700", color: "#047857" }}>
+                            #{c.queueNumber}
+                          </span>
+                        </td>
+                        <td>
+                          <span style={{ fontWeight: "700" }}>{pName}</span>
+                          <div style={{ fontSize: "11px", color: "#64748b" }}>
+                            {pCode}
+                          </div>
+                        </td>
+                        <td>{c.chiefComplaint || "General Consultation"}</td>
+                        <td>
+                          <span style={{ fontSize: "12px", color: "#64748b" }}>
+                            {c.completedAt ? new Date(c.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Completed"}
+                          </span>
+                        </td>
+                        <td>
+                          <button
+                            onClick={() => pTargetId && router.push(`/patient/${pTargetId}`)}
+                            className="btn btn-secondary btn-sm"
+                            style={{ gap: "5px" }}
+                          >
+                            <FileText size={14} />
+                            <span>View EHR</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
