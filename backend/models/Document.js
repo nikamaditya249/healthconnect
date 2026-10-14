@@ -8,6 +8,16 @@ const documentSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    patientCode: {
+      type: String,
+      default: "",
+      index: true,
+    },
+    patientObjectId: {
+      type: String,
+      default: "",
+      index: true,
+    },
     uploadedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

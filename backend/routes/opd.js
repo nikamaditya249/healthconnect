@@ -121,7 +121,7 @@ router.get("/stats", async (req, res) => {
 });
 
 // CREATE OPD VISIT / ENQUEUE PATIENT
-router.post(["/visit", "/add", "/", "/queue"], optionalAuth, async (req, res) => {
+router.post(["/visit", "/visits", "/add", "/", "/queue"], optionalAuth, async (req, res) => {
   try {
     const { patientId, doctorId, chiefComplaint, priority, patientData } = req.body;
 

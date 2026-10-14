@@ -160,6 +160,14 @@ export const deleteMedicalDocument = async (docId) => {
   return safeRequest(() => apiClient.delete(`/documents/${docId}`), "Failed to delete document");
 };
 
+export const syncMedicalDocuments = async (documents) => {
+  try {
+    return await apiClient.post("/documents/sync", { documents });
+  } catch {
+    // Non-fatal sync
+  }
+};
+
 // ==================== AI HEALTHCARE APIS ====================
 export const generateAIPatientSummary = async (patientId) => {
   return safeRequest(() => apiClient.post("/ai/patient-summary", { patientId }), "AI summary service unavailable");

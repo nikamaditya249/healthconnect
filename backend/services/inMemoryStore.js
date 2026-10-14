@@ -8,6 +8,7 @@ const TMP_DIR = "/tmp";
 const PATIENTS_FILE = path.join(TMP_DIR, "healthconnect_patients.json");
 const VISITS_FILE = path.join(TMP_DIR, "healthconnect_visits.json");
 const RECORDS_FILE = path.join(TMP_DIR, "healthconnect_records.json");
+const DOCUMENTS_FILE = path.join(TMP_DIR, "healthconnect_documents.json");
 
 export const isFallbackActive = () => fallbackActive;
 export const setFallbackActive = (val) => {
@@ -242,6 +243,7 @@ export const saveMemoryState = () => {
     fs.writeFileSync(PATIENTS_FILE, JSON.stringify(memoryPatients), "utf8");
     fs.writeFileSync(VISITS_FILE, JSON.stringify(memoryOPDVisits), "utf8");
     fs.writeFileSync(RECORDS_FILE, JSON.stringify(memoryRecords), "utf8");
+    fs.writeFileSync(DOCUMENTS_FILE, JSON.stringify(memoryDocuments), "utf8");
   } catch (err) {
     // Non-fatal if /tmp is read-only
   }
@@ -296,6 +298,20 @@ export const loadMemoryState = () => {
           }
         });
         memoryRecords.unshift(...newOnes);
+      }
+    }
+    if (fs.existsSync(DOCUMENTS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(DOCUMENTS_FILE, "utf8"));
+      if (Array.isArray(data) && data.length > 0) {
+        const existingDocIds = new Set(memoryDocuments.map((d) => String(d._id)));
+        const newOnes = [];
+        data.forEach((d) => {
+          if (d._id && !existingDocIds.has(String(d._id))) {
+            existingDocIds.add(String(d._id));
+            newOnes.push(d);
+          }
+        });
+        memoryDocuments.unshift(...newOnes);
       }
     }
   } catch (err) {

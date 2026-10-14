@@ -43,6 +43,7 @@ import {
   createOPDVisit,
   syncPatients,
   syncMedicalRecords,
+  syncMedicalDocuments,
 } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/components/Toast";
@@ -131,6 +132,8 @@ export default function PatientProfilePage() {
 
       // Merge server records with locally stored records to guarantee 100% persistence on serverless
       let mergedRecords = Array.isArray(recordsData) ? [...recordsData] : [];
+      let mergedDocs = Array.isArray(docsData) ? [...docsData] : [];
+
       try {
         const storedRecs = JSON.parse(localStorage.getItem("healthconnect_patient_records") || "[]");
         const targetId = String(pData?._id || id).toUpperCase();
@@ -153,7 +156,7 @@ export default function PatientProfilePage() {
           syncMedicalRecords(mergedRecords).catch(() => {});
         }
 
-        // Keep local cache updated
+        // Keep local records cache updated
         const otherPatientsRecs = storedRecs.filter((r) => {
           const rPid = String(r.patientId?._id || r.patientId?.patientId || r.patientId || "").toUpperCase();
           const rCode = String(r.patientCode || "").toUpperCase();
@@ -167,14 +170,48 @@ export default function PatientProfilePage() {
           "healthconnect_patient_records",
           JSON.stringify([...mergedRecords, ...otherPatientsRecs])
         );
+
+        // Keep local documents cache updated
+        const storedDocs = JSON.parse(localStorage.getItem("healthconnect_patient_documents") || "[]");
+        const patientStoredDocs = storedDocs.filter((d) => {
+          const dpId = String(d.patientId?._id || d.patientId?.patientId || d.patientId || "").toUpperCase();
+          const dpCode = String(d.patientCode || "").toUpperCase();
+          const dpObj = String(d.patientObjectId || "").toUpperCase();
+          return (
+            (targetId && (dpId === targetId || dpObj === targetId)) ||
+            (targetCode && (dpId === targetCode || dpCode === targetCode))
+          );
+        });
+
+        const existingDocIds = new Set(mergedDocs.map((d) => String(d._id)));
+        const missingDocs = patientStoredDocs.filter((d) => !existingDocIds.has(String(d._id)));
+        if (missingDocs.length > 0) {
+          mergedDocs.push(...missingDocs);
+          syncMedicalDocuments(mergedDocs).catch(() => {});
+        }
+
+        const otherPatientsDocs = storedDocs.filter((d) => {
+          const dpId = String(d.patientId?._id || d.patientId?.patientId || d.patientId || "").toUpperCase();
+          const dpCode = String(d.patientCode || "").toUpperCase();
+          const dpObj = String(d.patientObjectId || "").toUpperCase();
+          const matches =
+            (targetId && (dpId === targetId || dpObj === targetId)) ||
+            (targetCode && (dpId === targetCode || dpCode === targetCode));
+          return !matches;
+        });
+        localStorage.setItem(
+          "healthconnect_patient_documents",
+          JSON.stringify([...mergedDocs, ...otherPatientsDocs])
+        );
       } catch (e) {}
 
-      // Sort chronological descending (latest consultation first)
+      // Sort chronological descending (latest first)
       mergedRecords.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      mergedDocs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
       setPatient(pData);
       setRecords(mergedRecords);
-      setDocuments(docsData || []);
+      setDocuments(mergedDocs);
     } catch (err) {
       console.error("Error fetching patient details:", err);
       addToast("Failed to load patient records", "error");
@@ -371,14 +408,36 @@ export default function PatientProfilePage() {
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
-      formData.append("patientId", patient._id);
+      formData.append("patientId", patient?._id || patient?.patientId || id);
+      formData.append("patientCode", patient?.patientId || (String(id).startsWith("HC-") ? id : ""));
+      formData.append("patientObjectId", patient?._id || (id.length === 24 ? id : ""));
       formData.append("title", docTitle);
       formData.append("documentType", docType);
       if (docTextForAi) {
         formData.append("extractedText", docTextForAi);
       }
 
-      await uploadMedicalDocument(formData);
+      const newDoc = await uploadMedicalDocument(formData);
+
+      if (newDoc) {
+        if (!newDoc.patientCode && patient?.patientId) newDoc.patientCode = patient.patientId;
+        if (!newDoc.patientObjectId && patient?._id) newDoc.patientObjectId = patient._id;
+
+        try {
+          const stored = JSON.parse(localStorage.getItem("healthconnect_patient_documents") || "[]");
+          const exists = stored.some((d) => d._id === newDoc._id);
+          if (!exists) {
+            stored.unshift(newDoc);
+            localStorage.setItem("healthconnect_patient_documents", JSON.stringify(stored));
+          }
+        } catch (e) {}
+
+        setDocuments((prev) => {
+          const filtered = prev.filter((d) => d._id !== newDoc._id);
+          return [newDoc, ...filtered];
+        });
+      }
+
       addToast("Medical document uploaded successfully", "success");
       setShowDocModal(false);
       setDocTitle("");
@@ -398,6 +457,13 @@ export default function PatientProfilePage() {
     if (!confirm("Are you sure you want to remove this medical document?")) return;
     try {
       await deleteMedicalDocument(docId);
+      try {
+        const stored = JSON.parse(localStorage.getItem("healthconnect_patient_documents") || "[]");
+        const filtered = stored.filter((d) => d._id !== docId);
+        localStorage.setItem("healthconnect_patient_documents", JSON.stringify(filtered));
+      } catch (e) {}
+
+      setDocuments((prev) => prev.filter((d) => d._id !== docId));
       addToast("Document removed", "info");
       fetchData();
     } catch (err) {

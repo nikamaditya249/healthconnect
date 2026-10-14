@@ -69,7 +69,7 @@ router.get("/", async (req, res) => {
     const skip = (pageNum - 1) * limitNum;
 
     const total = await Patient.countDocuments(filter);
-    const patients = await Patient.find(filter)
+    let patients = await Patient.find(filter)
       .sort({ updatedAt: -1, createdAt: -1 })
       .skip(skip)
       .limit(limitNum);
@@ -83,11 +83,44 @@ router.get("/", async (req, res) => {
       }
     }
 
+    // Secondary fallback: Merge any uncommitted memory patients that match the filter
+    loadMemoryState();
+    const existingIds = new Set();
+    patients.forEach((p) => {
+      if (p.patientId) existingIds.add(String(p.patientId).toUpperCase());
+      if (p._id) existingIds.add(String(p._id));
+    });
+    for (const mp of memoryPatients) {
+      const hasPId = mp.patientId && existingIds.has(String(mp.patientId).toUpperCase());
+      const hasId = mp._id && existingIds.has(String(mp._id));
+      if (!hasPId && !hasId) {
+        let match = true;
+        if (search && search.trim()) {
+          const q = search.trim().toLowerCase();
+          match =
+            mp.name?.toLowerCase().includes(q) ||
+            mp.patientId?.toLowerCase().includes(q) ||
+            (mp.phone && mp.phone.toLowerCase().includes(q));
+        }
+        if (match && bloodGroup && bloodGroup !== "all") {
+          match = mp.bloodGroup === bloodGroup;
+        }
+        if (match && gender && gender !== "all") {
+          match = mp.gender?.toLowerCase() === gender.toLowerCase();
+        }
+        if (match) {
+          patients.unshift(mp);
+          if (mp.patientId) existingIds.add(String(mp.patientId).toUpperCase());
+          if (mp._id) existingIds.add(String(mp._id));
+        }
+      }
+    }
+
     res.json({
       patients,
-      total,
+      total: Math.max(total, patients.length),
       page: pageNum,
-      totalPages: Math.ceil(total / limitNum) || 1,
+      totalPages: Math.ceil(Math.max(total, patients.length) / limitNum) || 1,
     });
   } catch (err) {
     console.error("Error fetching patients:", err);
