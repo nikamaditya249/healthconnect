@@ -282,9 +282,9 @@ router.post("/", optionalAuth, async (req, res) => {
 
       const newRec = {
         _id: new mongoose.Types.ObjectId().toString(),
-        patientId: p ? p : patientId,
-        patientObjectId: p?._id || (mongoose.Types.ObjectId.isValid(patientId) ? String(patientId) : null),
-        patientCode: p?.patientId || (String(patientId).startsWith("HC-") ? String(patientId) : null),
+        patientId: p ? p : (mongoose.Types.ObjectId.isValid(patientId) ? patientId : (p?._id || patientId)),
+        patientObjectId: p?._id || patientObjectId || (mongoose.Types.ObjectId.isValid(patientId) ? String(patientId) : null),
+        patientCode: p?.patientId || patientCode || (String(patientId).startsWith("HC-") ? String(patientId) : null),
         visitId: visitId || null,
         doctorId: req.user?._id || memoryUsers[0]._id,
         doctorName: req.user?.name || doctorName || "Dr. Alok Sharma",
