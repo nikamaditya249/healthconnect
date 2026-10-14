@@ -1,16 +1,37 @@
 import axios from "axios";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5050/api";
+export const getApiBase = () => {
+  if (typeof window !== "undefined") {
+    // In production (Vercel or custom domain), use relative /api rewritten by vercel.json
+    if (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
+      return "/api";
+    }
+  }
+  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:5050/api";
+};
+
+export const getFileUrl = (url) => {
+  if (!url) return "#";
+  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:")) return url;
+  if (typeof window !== "undefined") {
+    if (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
+      return url;
+    }
+  }
+  return `http://localhost:5050${url}`;
+};
 
 const apiClient = axios.create({
-  baseURL: API_BASE,
   headers: {
     "Content-Type": "application/json",
   },
 });
 
-// Interceptor to attach JWT token
+// Interceptor to attach baseURL and JWT token dynamically
 apiClient.interceptors.request.use((config) => {
+  if (!config.baseURL) {
+    config.baseURL = getApiBase();
+  }
   if (typeof window !== "undefined") {
     const token = localStorage.getItem("healthconnect_token");
     if (token) {

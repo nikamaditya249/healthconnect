@@ -47,6 +47,7 @@ import {
   syncPatients,
   syncMedicalRecords,
   syncMedicalDocuments,
+  getFileUrl,
 } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/components/Toast";
@@ -1319,7 +1320,7 @@ export default function PatientProfilePage() {
 
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "16px", paddingTop: "12px", borderTop: "1px solid #e2e8f0" }}>
                     <a
-                      href={`http://localhost:5050${doc.fileUrl}`}
+                      href={getFileUrl(doc.fileUrl)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="btn btn-secondary btn-sm"

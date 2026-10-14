@@ -72,14 +72,18 @@ HealthConnect eliminates paper file vulnerabilities by providing a unified digit
 - **Live Clinic Metrics**: Total registered patients, active queue count, in-consultation count, completed visits today.
 - **Instant Patient Search**: Real-time filtering by Patient Name, ID (`HC-XXXXXX`), phone number, and blood group.
 - **Patient Registration**: Streamlined intake capturing demographics, emergency contacts, drug allergies, and chronic conditions.
-- **OPD Token Generation**: Instant queue placement with chief complaint and priority categorization.
+- **OPD Token Generation & Clinical Triage**:
+  - `🚨 Emergency Case`: Instantly prioritized to the very top of the waiting line ahead of normal and urgent cases.
+  - `⚡ Urgent / High Priority`: Positioned ahead of routine OPD cases.
+  - `Normal Routine OPD`: Enqueued in standard chronological FIFO order.
 
 ### 2. Doctor Consultation Station (`/doctor`)
-- **Queue Overview**: Waiting list with arrival times, chief complaints, priority badges, and active consultation alerts.
-- **"Start Consultation" Action**: Auto-transitions visit status to `in-progress` and directly opens the patient's comprehensive profile.
-- **Completed Tracker**: Real-time audit of patients treated today with diagnostic summaries.
+- **Queue Overview**: Waiting list sorted clinically (Active In-Consultation → Emergency → Urgent → Normal) with live status tags and chief complaints.
+- **"Start Consultation" / "Resume" Action**: Auto-transitions visit status to `in-progress` and directly opens the patient's comprehensive profile.
+- **"Complete & Submit" Action**: Closes consultation, updates stats, and moves patient directly into the Completed tab.
+- **Completed Visits Tab**: Real-time audit of patients treated today with diagnostic summaries, completion timestamps, and direct medical file access.
 
-### 3. Unified Patient Profile (`/patient/[id]`)
+### 3. Unified Patient Profile (`/patient/[id]`) & Add Record (`/doctor/add-record/[id]`)
 - **Demographics & Alerts**: Patient ID badge, blood group pill, drug allergies banner, and emergency contact details.
 - **Overview & Vitals**: Latest recorded blood pressure, heart rate, temperature, SpO2, and weight.
 - **AI Clinical Assistant**:
